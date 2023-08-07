@@ -330,8 +330,8 @@ int tty_open(char *name, const char *speed)
 
 
 
-    if ((fd = open("/dev/ttyS0", O_RDWR|O_NDELAY)) < 0) {
-        printf("oops");
+    if ((fd = open("/dev/ttyUSB0", O_RDWR|O_NDELAY)) < 0) {
+        perror("oops");
         return(-errno);
     }
     tty_fd = fd;
@@ -398,7 +398,7 @@ main()
   
 
 
-  if (tty_open("/dev/ttyS0", "115200") < 0)  { return(3); }
+  if (tty_open("/dev/ttyUSB0", "115200") < 0)  { return(3); }
 
 
     int disc = N_PPP;
@@ -417,7 +417,7 @@ main()
     if (tty_get_name(buff)) { return(3); }
 	printf(("%s started"), proto);
 
-	if (path_dev != NULL) printf((" on /dev/ttyS0"));
+	if (path_dev != NULL) printf((" on /dev/ttyUSB0"));
 	printf((" interface %s\n"), buff);
   
 

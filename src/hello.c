@@ -346,11 +346,12 @@ static void slip_receive_buf(struct tty_struct *tty, const unsigned char *cp,
 	}
 
 	skb_put_data(skb, cp, count);
+	skb->dev = dev;
     skb->protocol = htons(ETH_P_LOCALTALK);
 
-	skb_reset_mac_header(skb);    /* Point to entire packet. */
-    skb_pull(skb,3);
-    skb_reset_transport_header(skb);    /* Point to data (Skip header). */
+	//skb_reset_mac_header(skb);    /* Point to entire packet. */
+    //skb_pull(skb,3);
+    //skb_reset_transport_header(skb);    /* Point to data (Skip header). */
 
 	netif_rx(skb);
 	dev->stats.rx_packets++;
