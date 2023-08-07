@@ -71,20 +71,14 @@ static void sl_bump(struct slip *sl)
 		dev->stats.rx_dropped++;
 		return;
 	}
-	/* original slip
-	skb->dev = dev;
-	skb_put_data(skb, sl->rbuff, count);
-	skb_reset_mac_header(skb);
-	skb->protocol = htons(ETH_P_IP);
-	*/
 
-	//skb_put(skb, pkt_len);
 	skb_put_data(skb, sl->rbuff, count);
+	skb->dev = dev;
     skb->protocol = htons(ETH_P_LOCALTALK);
 
-	skb_reset_mac_header(skb);    /* Point to entire packet. */
-    skb_pull(skb,3);
-    skb_reset_transport_header(skb);    /* Point to data (Skip header). */
+	//skb_reset_mac_header(skb);    /* Point to entire packet. */
+    //skb_pull(skb,3);
+    //skb_reset_transport_header(skb);    /* Point to data (Skip header). */
 
 	netif_rx(skb);
 	dev->stats.rx_packets++;
@@ -338,6 +332,37 @@ static void slip_receive_buf(struct tty_struct *tty, const unsigned char *cp,
 	
 	// call sl_bump
 
+	for (int i = 0; i < count; i++) {
+		if (cp[i] == 0x00) {
+			i++;
+
+			if (cp[i] == 0xFF) {
+				sl->rbuff[sl->rcount] = 0x00;
+			} else if (cp[i] == 0xFD) {
+				printk(KERN_ERR "Tash done frame %i", sl->rcount);
+				sl_bump(sl);
+				sl->rcount = 0;
+			} else if (cp[i] == 0xFE) {
+				printk(KERN_ERR "Tash frame error");
+				sl->rcount = 0;
+			} else if (cp[i] == 0xFA) {
+				printk(KERN_ERR "Tash frame abort");
+				sl->rcount = 0;
+			} else if (cp[i] == 0xFC) {
+				printk(KERN_ERR "Tash frame crc error");
+				sl->rcount = 0;
+			} else {
+				printk(KERN_ERR "Tash escape unknown %c", cp[i]);
+			}
+		} else {
+			sl->rbuff[sl->rcount] = cp[i];
+		}
+
+		sl->rcount++;
+	}
+
+	
+/*
 	skb = dev_alloc_skb(count);
 	if (skb == NULL) {
 		printk(KERN_WARNING "%s: memory squeeze, dropping packet.\n", dev->name);
@@ -349,14 +374,77 @@ static void slip_receive_buf(struct tty_struct *tty, const unsigned char *cp,
 	skb->dev = dev;
     skb->protocol = htons(ETH_P_LOCALTALK);
 
-	//skb_reset_mac_header(skb);    /* Point to entire packet. */
+	//skb_reset_mac_header(skb);    // Point to entire packet.
     //skb_pull(skb,3);
-    //skb_reset_transport_header(skb);    /* Point to data (Skip header). */
+    //skb_reset_transport_header(skb);   // Point to data (Skip header).
 
 	netif_rx(skb);
 	dev->stats.rx_packets++;
+*/
 }
 
+/* Free a SLIP channel buffers. */
+static void sl_free_bufs(struct slip *sl)
+{
+	/* Free all SLIP frame buffers. */
+	kfree(xchg(&sl->rbuff, NULL));
+	kfree(xchg(&sl->xbuff, NULL));
+}
+
+static int sl_alloc_bufs(struct slip *sl, int mtu)
+{
+	int err = -ENOBUFS;
+	unsigned long len;
+	char *rbuff = NULL;
+	char *xbuff = NULL;
+
+	/*
+	 * Allocate the SLIP frame buffers:
+	 *
+	 * rbuff	Receive buffer.
+	 * xbuff	Transmit buffer.
+	 * cbuff        Temporary compression buffer.
+	 */
+	len = mtu * 2;
+
+	/*
+	 * allow for arrival of larger UDP packets, even if we say not to
+	 * also fixes a bug in which SunOS sends 512-byte packets even with
+	 * an MSS of 128
+	 */
+	if (len < 576 * 2)
+		len = 576 * 2;
+	rbuff = kmalloc(len + 4, GFP_KERNEL);
+	if (rbuff == NULL)
+		goto err_exit;
+	xbuff = kmalloc(len + 4, GFP_KERNEL);
+	if (xbuff == NULL)
+		goto err_exit;
+
+	spin_lock_bh(&sl->lock);
+	if (sl->tty == NULL) {
+		spin_unlock_bh(&sl->lock);
+		err = -ENODEV;
+		goto err_exit;
+	}
+	sl->mtu	     = mtu;
+	sl->buffsize = len;
+	sl->rcount   = 0;
+	sl->xleft    = 0;
+	rbuff = xchg(&sl->rbuff, rbuff);
+	xbuff = xchg(&sl->xbuff, xbuff);
+
+
+	spin_unlock_bh(&sl->lock);
+	err = 0;
+
+	/* Cleanup */
+err_exit:
+
+	kfree(xbuff);
+	kfree(rbuff);
+	return err;
+}
 
 /* Find a free SLIP channel, and link in this `tty' line. */
 static struct slip *sl_alloc(void)
@@ -455,9 +543,13 @@ static int slip_open(struct tty_struct *tty)
 
 	set_bit(SLF_INUSE, &sl->flags);
 
-	err = register_netdevice(sl->dev);
+	err = sl_alloc_bufs(sl, SL_MTU);
 	if (err)
 		goto err_free_chan;
+
+	err = register_netdevice(sl->dev);
+	if (err)
+		goto err_free_bufs;
 
 
 	/* Done.  We have linked the TTY line to a channel. */
@@ -468,6 +560,9 @@ static int slip_open(struct tty_struct *tty)
 	printk(KERN_ERR "TashTalk dono open");
 	return 0;
 
+
+err_free_bufs:
+	sl_free_bufs(sl);
 
 err_free_chan:
 printk(KERN_ERR "TashTalk OOPS");
