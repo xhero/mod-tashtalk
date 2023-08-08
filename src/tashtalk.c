@@ -75,7 +75,7 @@ static void sl_bump(struct slip *sl)
     skb->protocol = htons(ETH_P_LOCALTALK);
 
 	//skb_reset_mac_header(skb);    /* Point to entire packet. */
-    //skb_pull(skb,3);
+    //skb_pull(skb, 3);
     //skb_reset_transport_header(skb);    /* Point to data (Skip header). */
 
 	netif_rx(skb);
@@ -325,15 +325,24 @@ static void slip_receive_buf(struct tty_struct *tty, const unsigned char *cp,
 
 	printk(KERN_ERR "Tash read %i", count);
     print_hex_dump_bytes("Tash read: ", DUMP_PREFIX_NONE, cp, count);
-	
-	// call sl_bump
+
+	if (!test_bit(SLF_ESCAPE, &sl->flags))
+		sl->rcount = 0;
 
 	for (i = 0; i < count; i++) {
-		if (cp[i] == 0x00) {
-			i++;
 
+		printk(KERN_ERR "UGO %i %x", i, cp[i]);
+
+		if (cp[i] == 0x00) {
+			set_bit(SLF_ESCAPE, &sl->flags);
+			continue;
+		}
+
+		if (test_and_clear_bit(SLF_ESCAPE, &sl->flags)) {
 			if (cp[i] == 0xFF) {
 				sl->rbuff[sl->rcount] = 0x00;
+				printk(KERN_ERR "pino %i %x", sl->rcount, sl->rbuff[sl->rcount]);
+				sl->rcount++;
 			} else if (cp[i] == 0xFD) {
 				printk(KERN_ERR "Tash done frame %i", sl->rcount);
 				sl_bump(sl);
@@ -352,11 +361,13 @@ static void slip_receive_buf(struct tty_struct *tty, const unsigned char *cp,
 			}
 		} else {
 			sl->rbuff[sl->rcount] = cp[i];
+			printk(KERN_ERR "pino %i %x", sl->rcount, sl->rbuff[sl->rcount]);
+			sl->rcount++;
 		}
 
-		sl->rcount++;
 	}
 
+	printk(KERN_ERR "Done tashing");
 	
 /*
 	skb = dev_alloc_skb(count);
