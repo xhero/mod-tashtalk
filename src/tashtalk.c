@@ -37,9 +37,9 @@
 
 static struct net_device **slip_devs;
 
-static int slip_maxdev = SL_NRUNIT;
-module_param(slip_maxdev, int, 0);
-MODULE_PARM_DESC(slip_maxdev, "Maximum number of slip devices");
+static int tash_maxdev = TASH_MAX_CHAN;
+module_param(tash_maxdev, int, 0);
+MODULE_PARM_DESC(tash_maxdev, "Maximum number of tashtalk devices");
 
 /* Set the "sending" flag.  This must be atomic hence the set_bit. */
 static inline void sl_lock(struct slip *sl)
@@ -119,7 +119,7 @@ static void slip_transmit(struct work_struct *work)
 
 	spin_lock_bh(&sl->lock);
 	/* First make sure we're connected. */
-	if (!sl->tty || sl->magic != SLIP_MAGIC || !netif_running(sl->dev)) {
+	if (!sl->tty || sl->magic != TASH_MAGIC || !netif_running(sl->dev)) {
 		spin_unlock_bh(&sl->lock);
 		return;
 	}
@@ -325,7 +325,7 @@ static void slip_receive_buf(struct tty_struct *tty, const unsigned char *cp,
 	struct net_device *dev = sl->dev;
 	int i;
 
-	if (!sl || sl->magic != SLIP_MAGIC || !netif_running(sl->dev))
+	if (!sl || sl->magic != TASH_MAGIC || !netif_running(sl->dev))
 		return;
 
 	printk(KERN_ERR "Tash read %i", count);
@@ -455,13 +455,13 @@ static struct slip *sl_alloc(void)
 	struct net_device *dev = NULL;
 	struct slip       *sl;
 
-	for (i = 0; i < slip_maxdev; i++) {
+	for (i = 0; i < tash_maxdev; i++) {
 		dev = slip_devs[i];
 		if (dev == NULL)
 			break;
 	}
 	/* Sorry, too many, all slots in use */
-	if (i >= slip_maxdev)
+	if (i >= tash_maxdev)
 		return NULL;
 	
 	dev = alloc_ltalkdev(sizeof(*sl));
@@ -473,7 +473,7 @@ static struct slip *sl_alloc(void)
 	sl = netdev_priv(dev);
 
 	/* Initialize channel control data */
-	sl->magic       = SLIP_MAGIC;
+	sl->magic       = TASH_MAGIC;
 	sl->dev	      	= dev;
 	sl->mtu = 512;
 	sl->mode = 0; // Maybe useful in the future?
@@ -525,7 +525,7 @@ static int slip_open(struct tty_struct *tty)
 
 	err = -EEXIST;
 	/* First make sure we're not already connected. */
-	if (sl && sl->magic == SLIP_MAGIC)
+	if (sl && sl->magic == TASH_MAGIC)
 		goto err_exit;
 
 	/* OK.  Find a free SLIP channel to use. */
@@ -596,7 +596,7 @@ static void slip_close(struct tty_struct *tty)
 	struct slip *sl = tty->disc_data;
 
 	/* First make sure we're connected. */
-	if (!sl || sl->magic != SLIP_MAGIC || sl->tty != tty)
+	if (!sl || sl->magic != TASH_MAGIC || sl->tty != tty)
 		return;
 
 	spin_lock_bh(&sl->lock);
@@ -639,7 +639,7 @@ static int slip_ioctl(struct tty_struct *tty, unsigned int cmd,
 	int __user *p = (int __user *)arg;
 
 	/* First make sure we're connected. */
-	if (!sl || sl->magic != SLIP_MAGIC)
+	if (!sl || sl->magic != TASH_MAGIC)
 		return -EINVAL;
 
 	switch (cmd) {
@@ -691,12 +691,12 @@ static int __init slip_init(void)
 {
 	int status;
 
-	if (slip_maxdev < 4)
-		slip_maxdev = 4; /* Sanity */
+	if (tash_maxdev < 4)
+		tash_maxdev = 4; /* Sanity */
 
-	printk(KERN_INFO "TashTalk Interface (dynamic channels, max=%d)", slip_maxdev);
+	printk(KERN_INFO "TashTalk Interface (dynamic channels, max=%d)", tash_maxdev);
 
-	slip_devs = kcalloc(slip_maxdev, sizeof(struct net_device *),
+	slip_devs = kcalloc(tash_maxdev, sizeof(struct net_device *),
 								GFP_KERNEL);
 	if (!slip_devs)
 		return -ENOMEM;
@@ -728,7 +728,7 @@ static void __exit slip_exit(void)
 			msleep_interruptible(100);
 
 		busy = 0;
-		for (i = 0; i < slip_maxdev; i++) {
+		for (i = 0; i < tash_maxdev; i++) {
 			dev = slip_devs[i];
 			if (!dev)
 				continue;
@@ -745,7 +745,7 @@ static void __exit slip_exit(void)
 	/* FIXME: hangup is async so we should wait when doing this second
 	   phase */
 
-	for (i = 0; i < slip_maxdev; i++) {
+	for (i = 0; i < tash_maxdev; i++) {
 		dev = slip_devs[i];
 		if (!dev)
 			continue;

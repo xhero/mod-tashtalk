@@ -24,7 +24,7 @@
 #define _LINUX_SLIP_H
 
 /* SLIP configuration. */
-#define SL_NRUNIT	256		/* MAX number of SLIP channels;
+#define TASH_MAX_CHAN	32		/* MAX number of SLIP channels;
 					   This can be overridden with
 					   insmod -oslip_maxdev=nnn	*/
 #define SL_MTU		296		/* 296; I am used to 600- FvK	*/
@@ -58,6 +58,6 @@ struct slip {
 
 };
 
-#define SLIP_MAGIC 0x5302
+#define TASH_MAGIC 0xFFFA
 
 #endif	/* _LINUX_SLIP.H */
