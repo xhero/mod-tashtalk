@@ -172,10 +172,9 @@ out:
 static netdev_tx_t
 sl_xmit(struct sk_buff *skb, struct net_device *dev)
 {
-
-	printk(KERN_ERR "%s: le send\n", dev->name);
-
 	struct slip *sl = netdev_priv(dev);
+
+	printk(KERN_ERR "TashTalk: send data on %s\n", dev->name);
 
 	spin_lock(&sl->lock);
 	if (!netif_running(dev)) {
@@ -228,10 +227,9 @@ sl_close(struct net_device *dev)
 
 static int sl_open(struct net_device *dev)
 {
+	struct slip *sl = netdev_priv(dev);
 
 	printk(KERN_ERR "Loaded tash netdevice");
-
-	struct slip *sl = netdev_priv(dev);
 
 	if (sl->tty == NULL)
 		return -ENODEV;
@@ -319,8 +317,7 @@ static void slip_receive_buf(struct tty_struct *tty, const unsigned char *cp,
 		const char *fp, int count)
 {
 	struct slip *sl = tty->disc_data;
-	struct sk_buff *skb;
-	struct net_device *dev = sl->dev;
+	//struct net_device *dev = sl->dev;
 	int i;
 
 	if (!sl || sl->magic != TASH_MAGIC || !netif_running(sl->dev))
