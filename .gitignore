@@ -48,3 +48,13 @@ Thumbs.db
 *.mov
 *.wmv
 
+.Module.symvers.cmd
+.modules.order.cmd
+Module.symvers
+modules.order
+
+src/.*
+src/*.ko
+src/*.o
+src/*.mod.c
+src/*.mod
