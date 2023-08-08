@@ -86,6 +86,7 @@ static void sl_bump(struct slip *sl)
 static void sl_encaps(struct slip *sl, unsigned char *icp, int len)
 {
 	int actual;
+	char start = 0x01;
 
 	if (len > sl->mtu) {		/* Sigh, shouldn't occur BUT ... */
 		printk(KERN_WARNING "%s: truncating oversized transmit packet %i vs %i!\n", sl->dev->name, len, sl->mtu);
@@ -103,7 +104,8 @@ static void sl_encaps(struct slip *sl, unsigned char *icp, int len)
 	 *       14 Oct 1994  Dmitry Gorodchanin.
 	 */
 	set_bit(TTY_DO_WRITE_WAKEUP, &sl->tty->flags);
-	actual = sl->tty->ops->write(sl->tty, icp, len);
+	actual = sl->tty->ops->write(sl->tty, &start, 1);
+	actual += sl->tty->ops->write(sl->tty, icp, len);
 
 	printk(KERN_WARNING "Trasmit to TASH %i", actual);
 	sl_unlock(sl);
@@ -331,8 +333,6 @@ static void slip_receive_buf(struct tty_struct *tty, const unsigned char *cp,
 
 	for (i = 0; i < count; i++) {
 
-		printk(KERN_ERR "UGO %i %x", i, cp[i]);
-
 		if (cp[i] == 0x00) {
 			set_bit(SLF_ESCAPE, &sl->flags);
 			continue;
@@ -341,7 +341,6 @@ static void slip_receive_buf(struct tty_struct *tty, const unsigned char *cp,
 		if (test_and_clear_bit(SLF_ESCAPE, &sl->flags)) {
 			if (cp[i] == 0xFF) {
 				sl->rbuff[sl->rcount] = 0x00;
-				printk(KERN_ERR "pino %i %x", sl->rcount, sl->rbuff[sl->rcount]);
 				sl->rcount++;
 			} else if (cp[i] == 0xFD) {
 				printk(KERN_ERR "Tash done frame %i", sl->rcount);
@@ -361,7 +360,6 @@ static void slip_receive_buf(struct tty_struct *tty, const unsigned char *cp,
 			}
 		} else {
 			sl->rbuff[sl->rcount] = cp[i];
-			printk(KERN_ERR "pino %i %x", sl->rcount, sl->rbuff[sl->rcount]);
 			sl->rcount++;
 		}
 
