@@ -476,6 +476,7 @@ static struct slip *sl_alloc(void)
 	sl->magic       = SLIP_MAGIC;
 	sl->dev	      	= dev;
 	sl->mtu = 512;
+	sl->mode = 0; // Maybe useful in the future?
 
 	sl->dev->netdev_ops = &sl_netdev_ops;
 	sl->dev->type =  ARPHRD_LOCALTLK;
@@ -483,7 +484,6 @@ static struct slip *sl_alloc(void)
 
 	spin_lock_init(&sl->lock);
 	INIT_WORK(&sl->tx_work, slip_transmit);
-	sl->mode        = SL_MODE_DEFAULT;
 
 	printk(KERN_ERR "dev index is %i", i);
 	printk(KERN_ERR "dev pointer is %p", dev);
@@ -649,6 +649,7 @@ static int slip_ioctl(struct tty_struct *tty, unsigned int cmd,
 			return -EFAULT;
 		return 0;
 
+	// do we need mode?
 	case SIOCGIFENCAP:
 		if (put_user(sl->mode, p))
 			return -EFAULT;
@@ -657,18 +658,7 @@ static int slip_ioctl(struct tty_struct *tty, unsigned int cmd,
 	case SIOCSIFENCAP:
 		if (get_user(tmp, p))
 			return -EFAULT;
-#ifndef SL_INCLUDE_CSLIP
-		if (tmp & (SL_MODE_CSLIP|SL_MODE_ADAPTIVE))
-			return -EINVAL;
-#else
-		if ((tmp & (SL_MODE_ADAPTIVE | SL_MODE_CSLIP)) ==
-		    (SL_MODE_ADAPTIVE | SL_MODE_CSLIP))
-			/* return -EINVAL; */
-			tmp &= ~SL_MODE_ADAPTIVE;
-#endif
-
 		sl->mode = tmp;
-		//sl->dev->type = ARPHRD_SLIP + sl->mode;
 		return 0;
 
 	case SIOCSIFHWADDR:
