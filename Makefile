@@ -1,7 +1,7 @@
 KPATH := /usr/src/linux-headers-`uname -r`
 #KPATH := /home/ubuntu/linux-5.19
 
-obj-m := ./src/hello.o
+obj-m := ./src/tashtalk.o
 
 .PHONY: all clean doc
 

@@ -24,7 +24,7 @@
 #include <linux/init.h>
 #include <linux/slab.h>
 #include <linux/workqueue.h>
-#include "slip.h"
+#include "tashtalk.h"
 #include <linux/if_ltalk.h>
 #include <linux/atalk.h>
 #ifdef CONFIG_INET
@@ -323,6 +323,7 @@ static void slip_receive_buf(struct tty_struct *tty, const unsigned char *cp,
 	struct slip *sl = tty->disc_data;
 	struct sk_buff *skb;
 	struct net_device *dev = sl->dev;
+	int i;
 
 	if (!sl || sl->magic != SLIP_MAGIC || !netif_running(sl->dev))
 		return;
@@ -332,7 +333,7 @@ static void slip_receive_buf(struct tty_struct *tty, const unsigned char *cp,
 	
 	// call sl_bump
 
-	for (int i = 0; i < count; i++) {
+	for (i = 0; i < count; i++) {
 		if (cp[i] == 0x00) {
 			i++;
 

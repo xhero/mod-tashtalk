@@ -1,5 +1,5 @@
 sudo modprobe appletalk
-sudo insmod src/hello.ko
+sudo insmod src/tashtalk.ko
 #sudo slattach -s 115200 -p cslip /dev/ttyUSB0
 #sudo ./discipline
 
