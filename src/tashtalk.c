@@ -258,7 +258,7 @@ sl_get_stats64(struct net_device *dev, struct rtnl_link_stats64 *stats)
 	stats->rx_over_errors = devstats->rx_over_errors;
 }
 
-static int cops_ioctl(struct net_device *dev, struct ifreq *ifr, int cmd)
+static int tt_ioctl(struct net_device *dev, struct ifreq *ifr, int cmd)
 {
         struct sockaddr_at *sa = (struct sockaddr_at *)&ifr->ifr_addr;
 
@@ -289,12 +289,12 @@ static void sl_free_netdev(struct net_device *dev)
 }
 
 static const struct net_device_ops sl_netdev_ops = {
-	.ndo_open		= sl_open,
-	.ndo_stop		= sl_close,
+	.ndo_open			= sl_open,
+	.ndo_stop			= sl_close,
 	.ndo_start_xmit		= sl_xmit,
-	.ndo_get_stats64        = sl_get_stats64,
+	.ndo_get_stats64    = sl_get_stats64,
 	.ndo_tx_timeout		= sl_tx_timeout,
-	.ndo_do_ioctl           = cops_ioctl,
+	.ndo_do_ioctl       = tt_ioctl,
 };
 
 
