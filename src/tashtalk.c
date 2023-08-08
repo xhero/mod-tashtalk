@@ -33,8 +33,6 @@
 #include <net/slhc_vj.h>
 #endif
 
-#define SLIP_VERSION	"0.8.4-NET3.019-NEWTTY"
-
 static struct net_device **slip_devs;
 
 static int tash_maxdev = TASH_MAX_CHAN;
@@ -448,10 +446,9 @@ err_exit:
 }
 
 /* Find a free SLIP channel, and link in this `tty' line. */
-static struct slip *sl_alloc(void)
+static struct slip *tt_alloc(void)
 {
 	int i;
-	char name[IFNAMSIZ];
 	struct net_device *dev = NULL;
 	struct slip       *sl;
 
@@ -460,33 +457,35 @@ static struct slip *sl_alloc(void)
 		if (dev == NULL)
 			break;
 	}
-	/* Sorry, too many, all slots in use */
-	if (i >= tash_maxdev)
+
+	if (i >= tash_maxdev) {
+		printk(KERN_ERR "TashTalk: all slots in use");
 		return NULL;
+	}
 	
+	/* Also assigns the default lt* name */
 	dev = alloc_ltalkdev(sizeof(*sl));
 
-	if (!dev)
+	if (!dev) {
+		printk(KERN_ERR "TashTalk: could not allocate ltalkdev");
 		return NULL;
+	}
 
 	dev->base_addr  = i;
 	sl = netdev_priv(dev);
 
 	/* Initialize channel control data */
-	sl->magic       = TASH_MAGIC;
-	sl->dev	      	= dev;
-	sl->mtu = 512;
-	sl->mode = 0; // Maybe useful in the future?
+	sl->magic = TASH_MAGIC;
+	sl->dev = dev;
+	sl->mtu = TT_MTU;
+	sl->mode = 0; /*Maybe useful in the future? */
 
 	sl->dev->netdev_ops = &sl_netdev_ops;
 	sl->dev->type =  ARPHRD_LOCALTLK;
-	sl->dev->priv_destructor	= sl_free_netdev;
+	sl->dev->priv_destructor = sl_free_netdev;
 
 	spin_lock_init(&sl->lock);
 	INIT_WORK(&sl->tx_work, slip_transmit);
-
-	printk(KERN_ERR "dev index is %i", i);
-	printk(KERN_ERR "dev pointer is %p", dev);
 
 	slip_devs[i] = dev;
 	return sl;
@@ -513,8 +512,6 @@ static int slip_open(struct tty_struct *tty)
 	if (tty->ops->write == NULL)
 		return -EOPNOTSUPP;
 
-	printk(KERN_ERR "TashTalk op port %s", tty->name);
-
 	/* RTnetlink lock is misused here to serialize concurrent
 	   opens of slip channels. There are better ways, but it is
 	   the simplest one.
@@ -531,8 +528,7 @@ static int slip_open(struct tty_struct *tty)
 	/* OK.  Find a free SLIP channel to use. */
 	err = -ENFILE;
 
-
-	sl = sl_alloc();
+	sl = tt_alloc();
 	if (sl == NULL)
 		goto err_exit;
 
@@ -541,10 +537,9 @@ static int slip_open(struct tty_struct *tty)
 	tty->disc_data = sl;
 	sl->pid = current->pid;
 
-
 	set_bit(SLF_INUSE, &sl->flags);
 
-	err = sl_alloc_bufs(sl, SL_MTU);
+	err = sl_alloc_bufs(sl, TT_MTU);
 	if (err)
 		goto err_free_chan;
 
@@ -558,7 +553,7 @@ static int slip_open(struct tty_struct *tty)
 	tty->receive_room = 65536;	/* We don't flow control */
 
 	/* TTY layer expects 0 on success */
-	printk(KERN_ERR "TashTalk dono open");
+	printk(KERN_INFO "TashTalk is on port %s", tty->name);
 	return 0;
 
 
@@ -566,7 +561,7 @@ err_free_bufs:
 	sl_free_bufs(sl);
 
 err_free_chan:
-printk(KERN_ERR "TashTalk OOPS");
+	printk(KERN_ERR "TashTalk: could not open device");
 	sl->tty = NULL;
 	tty->disc_data = NULL;
 	clear_bit(SLF_INUSE, &sl->flags);
@@ -704,7 +699,7 @@ static int __init slip_init(void)
 	/* Fill in our line protocol discipline, and register it */
 	status = tty_register_ldisc(&sl_ldisc);
 	if (status != 0) {
-		printk(KERN_ERR "SLIP: can't register line discipline (err = %d)\n", status);
+		printk(KERN_ERR "TaskTalk: can't register line discipline (err = %d)\n", status);
 		kfree(slip_devs);
 	}
 	return status;
@@ -757,10 +752,7 @@ static void __exit slip_exit(void)
 			       dev->name);
 		}
 
-		printk(KERN_ERR "The dev1: %p\n", dev);
-		printk(KERN_ERR "The dev2: %p\n", dev);
 		unregister_netdev(dev);
-		printk(KERN_ERR "unregistered\n");
 	}
 
 	kfree(slip_devs);
