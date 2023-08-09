@@ -20,7 +20,7 @@
 #define TASH_MAX_CHAN	32
 #define TT_MTU		    600		/* FIXME figure out the real mtu	*/
 
-struct slip {
+struct tashtalk {
   int			magic;
 
   /* Various fields. */
@@ -39,9 +39,8 @@ struct slip {
   int             buffsize; /* Max buffers sizes            */
 
   unsigned long		flags;		/* Flag values/ mode etc	*/
-#define SLF_INUSE	0		      /* Channel in use               */
-#define SLF_ESCAPE	1       /* ESC received                 */
-#define SLF_ERROR	2         /* Parity, etc. error           */
+#define TT_FLAG_INUSE	0		  /* Channel in use               */
+#define TT_FLAG_ESCAPE 1    /* ESC received                 */
 
   unsigned char		mode;		/* really not used */
   pid_t			pid;

@@ -19,7 +19,6 @@
 #include <linux/skbuff.h>
 #include <linux/rtnetlink.h>
 #include <linux/if_arp.h>
-#include <linux/if_slip.h>
 #include <linux/delay.h>
 #include <linux/init.h>
 #include <linux/slab.h>
@@ -33,7 +32,7 @@
 #include <net/slhc_vj.h>
 #endif
 
-static struct net_device **slip_devs;
+static struct net_device **tastalk_devs;
 
 static int tash_maxdev = TASH_MAX_CHAN;
 module_param(tash_maxdev, int, 0);
@@ -59,20 +58,20 @@ u16 lt_crc[] = {
 };
 
 /* Set the "sending" flag.  This must be atomic hence the set_bit. */
-static inline void sl_lock(struct slip *sl)
+static inline void tt_lock_netif(struct tashtalk *sl)
 {
 	netif_stop_queue(sl->dev);
 }
 
 
 /* Clear the "sending" flag.  This must be atomic, hence the ASM. */
-static inline void sl_unlock(struct slip *sl)
+static inline void tt_unlock_netif(struct tashtalk *sl)
 {
 	netif_wake_queue(sl->dev);
 }
 
 /* Send one completely decapsulated IP datagram to the IP layer. */
-static void sl_bump(struct slip *sl)
+static void tt_post_to_netif(struct tashtalk *sl)
 {
 	struct net_device *dev = sl->dev;
 	struct sk_buff *skb;
@@ -102,7 +101,7 @@ static void sl_bump(struct slip *sl)
 }
 
 /* Encapsulate one IP datagram and stuff into a TTY queue. */
-static void sl_encaps(struct slip *sl, unsigned char *icp, int len)
+static void tt_send_frame(struct tashtalk *sl, unsigned char *icp, int len)
 {
 	int actual;
 	char start = 0x01;
@@ -110,7 +109,7 @@ static void sl_encaps(struct slip *sl, unsigned char *icp, int len)
 	if (len > sl->mtu) {		/* Sigh, shouldn't occur BUT ... */
 		printk(KERN_WARNING "%s: truncating oversized transmit packet %i vs %i!\n", sl->dev->name, len, sl->mtu);
 		sl->dev->stats.tx_dropped++;
-		sl_unlock(sl);
+		tt_unlock_netif(sl);
 		return;
 	}
 
@@ -143,13 +142,13 @@ static void sl_encaps(struct slip *sl, unsigned char *icp, int len)
 	actual += sl->tty->ops->write(sl->tty, crc_bytes, 2);
 
 	printk(KERN_WARNING "Trasmit to TASH %i", actual);
-	sl_unlock(sl);
+	tt_unlock_netif(sl);
 }
 
 /* Write out any remaining transmit buffer. Scheduled when tty is writable */
-static void slip_transmit(struct work_struct *work)
+static void tash_transmit_worker(struct work_struct *work)
 {
-	struct slip *sl = container_of(work, struct slip, tx_work);
+	struct tashtalk *sl = container_of(work, struct tashtalk, tx_work);
 	int actual;
 
 	spin_lock_bh(&sl->lock);
@@ -165,7 +164,7 @@ static void slip_transmit(struct work_struct *work)
 		sl->dev->stats.tx_packets++;
 		clear_bit(TTY_DO_WRITE_WAKEUP, &sl->tty->flags);
 		spin_unlock_bh(&sl->lock);
-		sl_unlock(sl);
+		tt_unlock_netif(sl);
 		return;
 	}
 
@@ -181,7 +180,7 @@ static void slip_transmit(struct work_struct *work)
  */
 static void tashtalk_write_wakeup(struct tty_struct *tty)
 {
-	struct slip *sl;
+	struct tashtalk *sl;
 
 	rcu_read_lock();
 	sl = rcu_dereference(tty->disc_data);
@@ -192,7 +191,7 @@ static void tashtalk_write_wakeup(struct tty_struct *tty)
 
 static void tt_tx_timeout(struct net_device *dev, unsigned int txqueue)
 {
-	struct slip *sl = netdev_priv(dev);
+	struct tashtalk *sl = netdev_priv(dev);
 
 	spin_lock(&sl->lock);
 
@@ -209,7 +208,7 @@ out:
 static netdev_tx_t
 tt_transmit(struct sk_buff *skb, struct net_device *dev)
 {
-	struct slip *sl = netdev_priv(dev);
+	struct tashtalk *sl = netdev_priv(dev);
 
 	printk(KERN_ERR "TashTalk: send data on %s\n", dev->name);
 
@@ -227,9 +226,9 @@ tt_transmit(struct sk_buff *skb, struct net_device *dev)
 		return NETDEV_TX_OK;
 	}
 
-	sl_lock(sl);
+	tt_lock_netif(sl);
 	dev->stats.tx_bytes += skb->len;
-	sl_encaps(sl, skb->data, skb->len);
+	tt_send_frame(sl, skb->data, skb->len);
 	spin_unlock(&sl->lock);
 
 	dev_kfree_skb(skb);
@@ -246,7 +245,7 @@ tt_transmit(struct sk_buff *skb, struct net_device *dev)
 static int
 tt_close(struct net_device *dev)
 {
-	struct slip *sl = netdev_priv(dev);
+	struct tashtalk *sl = netdev_priv(dev);
 
 	spin_lock_bh(&sl->lock);
 	if (sl->tty)
@@ -264,14 +263,14 @@ tt_close(struct net_device *dev)
 
 static int tt_open(struct net_device *dev)
 {
-	struct slip *sl = netdev_priv(dev);
+	struct tashtalk *sl = netdev_priv(dev);
 
 	printk(KERN_ERR "Loaded tash netdevice");
 
 	if (sl->tty == NULL)
 		return -ENODEV;
 
-	sl->flags &= (1 << SLF_INUSE);
+	sl->flags &= (1 << TT_FLAG_INUSE);
 	netif_start_queue(dev);
 	return 0;
 }
@@ -297,7 +296,7 @@ tt_get_stats64(struct net_device *dev, struct rtnl_link_stats64 *stats)
 
 static int tt_ioctl(struct net_device *dev, struct ifreq *ifr, int cmd)
 {
-		struct slip *sl = netdev_priv(dev);
+		struct tashtalk *sl = netdev_priv(dev);
         struct sockaddr_at *sa = (struct sockaddr_at *)&ifr->ifr_addr;
         struct atalk_addr *aa = &sl->node_addr;
 
@@ -328,12 +327,12 @@ static int tt_ioctl(struct net_device *dev, struct ifreq *ifr, int cmd)
 	return 0;
 }
 
-/* Hook the destructor so we can free slip devices at the right point in time */
-static void sl_free_netdev(struct net_device *dev)
+/* The destructor */
+static void tt_free_netdev(struct net_device *dev)
 {
 	int i = dev->base_addr;
 
-	slip_devs[i] = NULL;
+	tastalk_devs[i] = NULL;
 }
 
 /* Copied from cops.c, make appletalk happy */
@@ -354,24 +353,14 @@ static const struct net_device_ops tt_netdev_ops = {
 
 
 
-/******************************************
-  Routines looking at TTY side.
- ******************************************/
-
-
-/*
- * Handle the 'receiver data ready' interrupt.
- * This function is called by the 'tty_io' module in the kernel when
- * a block of SLIP data has been received, which can now be decapsulated
- * and sent on to some IP layer for further processing. This will not
- * be re-entered while running but other ldisc functions may be called
- * in parallel
- */
+/********************************************
+  Routines looking at TTY talking to TashTalk
+ ********************************************/
 
 static void tashtalk_receive_buf(struct tty_struct *tty, const unsigned char *cp,
 		const char *fp, int count)
 {
-	struct slip *sl = tty->disc_data;
+	struct tashtalk *sl = tty->disc_data;
 	//struct net_device *dev = sl->dev;
 	int i;
 
@@ -381,23 +370,23 @@ static void tashtalk_receive_buf(struct tty_struct *tty, const unsigned char *cp
 	printk(KERN_ERR "Tash read %i", count);
     print_hex_dump_bytes("Tash read: ", DUMP_PREFIX_NONE, cp, count);
 
-	if (!test_bit(SLF_ESCAPE, &sl->flags))
+	if (!test_bit(TT_FLAG_ESCAPE, &sl->flags))
 		sl->rcount = 0;
 
 	for (i = 0; i < count; i++) {
 
 		if (cp[i] == 0x00) {
-			set_bit(SLF_ESCAPE, &sl->flags);
+			set_bit(TT_FLAG_ESCAPE, &sl->flags);
 			continue;
 		}
 
-		if (test_and_clear_bit(SLF_ESCAPE, &sl->flags)) {
+		if (test_and_clear_bit(TT_FLAG_ESCAPE, &sl->flags)) {
 			if (cp[i] == 0xFF) {
 				sl->rbuff[sl->rcount] = 0x00;
 				sl->rcount++;
 			} else if (cp[i] == 0xFD) {
 				printk(KERN_ERR "Tash done frame %i", sl->rcount);
-				sl_bump(sl);
+				tt_post_to_netif(sl);
 				sl->rcount = 0;
 			} else if (cp[i] == 0xFE) {
 				printk(KERN_ERR "Tash frame error");
@@ -441,40 +430,27 @@ static void tashtalk_receive_buf(struct tty_struct *tty, const unsigned char *cp
 */
 }
 
-/* Free a SLIP channel buffers. */
-static void sl_free_bufs(struct slip *sl)
+/* Free a channel buffers. */
+static void tt_free_bufs(struct tashtalk *sl)
 {
-	/* Free all SLIP frame buffers. */
 	kfree(xchg(&sl->rbuff, NULL));
 	kfree(xchg(&sl->xbuff, NULL));
 }
 
-static int sl_alloc_bufs(struct slip *sl, int mtu)
+static int tt_alloc_bufs(struct tashtalk *sl, int mtu)
 {
 	int err = -ENOBUFS;
 	unsigned long len;
 	char *rbuff = NULL;
 	char *xbuff = NULL;
 
-	/*
-	 * Allocate the SLIP frame buffers:
-	 *
-	 * rbuff	Receive buffer.
-	 * xbuff	Transmit buffer.
-	 * cbuff        Temporary compression buffer.
-	 */
+	// Make enough space? FIXME I guess
 	len = mtu * 2;
 
-	/*
-	 * allow for arrival of larger UDP packets, even if we say not to
-	 * also fixes a bug in which SunOS sends 512-byte packets even with
-	 * an MSS of 128
-	 */
-	if (len < 576 * 2)
-		len = 576 * 2;
 	rbuff = kmalloc(len + 4, GFP_KERNEL);
 	if (rbuff == NULL)
 		goto err_exit;
+
 	xbuff = kmalloc(len + 4, GFP_KERNEL);
 	if (xbuff == NULL)
 		goto err_exit;
@@ -485,13 +461,14 @@ static int sl_alloc_bufs(struct slip *sl, int mtu)
 		err = -ENODEV;
 		goto err_exit;
 	}
+
 	sl->mtu	     = mtu;
 	sl->buffsize = len;
 	sl->rcount   = 0;
 	sl->xleft    = 0;
+
 	rbuff = xchg(&sl->rbuff, rbuff);
 	xbuff = xchg(&sl->xbuff, xbuff);
-
 
 	spin_unlock_bh(&sl->lock);
 	err = 0;
@@ -504,15 +481,15 @@ err_exit:
 	return err;
 }
 
-/* Find a free SLIP channel, and link in this `tty' line. */
-static struct slip *tt_alloc(void)
+/* Find a free channel, and link in this `tty' line. */
+static struct tashtalk *tt_alloc(void)
 {
 	int i;
 	struct net_device *dev = NULL;
-	struct slip       *sl;
+	struct tashtalk       *sl;
 
 	for (i = 0; i < tash_maxdev; i++) {
-		dev = slip_devs[i];
+		dev = tastalk_devs[i];
 		if (dev == NULL)
 			break;
 	}
@@ -541,28 +518,24 @@ static struct slip *tt_alloc(void)
 
 	sl->dev->netdev_ops = &tt_netdev_ops;
 	sl->dev->type =  ARPHRD_LOCALTLK;
-	sl->dev->priv_destructor = sl_free_netdev;
+	sl->dev->priv_destructor = tt_free_netdev;
 
 	spin_lock_init(&sl->lock);
-	INIT_WORK(&sl->tx_work, slip_transmit);
+	INIT_WORK(&sl->tx_work, tash_transmit_worker);
 
-	slip_devs[i] = dev;
+	tastalk_devs[i] = dev;
 	return sl;
 }
 
 /*
- * Open the high-level part of the SLIP channel.
- * This function is called by the TTY module when the
- * SLIP line discipline is called for.  Because we are
- * sure the tty line exists, we only have to link it to
- * a free SLIP channel...
- *
- * Called in process context serialized from other ldisc calls.
+ * Open the high-level part of the TashTalk channel.
+ * Generally used with an userspave program:
+ * sudo ldattach -d -s 1000000 PPP /dev/ttyUSB0
  */
 
 static int tashtalk_open(struct tty_struct *tty)
 {
-	struct slip *sl;
+	struct tashtalk *sl;
 	int err;
 
 	if (!capable(CAP_NET_ADMIN))
@@ -584,28 +557,30 @@ static int tashtalk_open(struct tty_struct *tty)
 	if (sl && sl->magic == TASH_MAGIC)
 		goto err_exit;
 
-	/* OK.  Find a free SLIP channel to use. */
 	err = -ENFILE;
 
 	sl = tt_alloc();
 	if (sl == NULL)
 		goto err_exit;
 
-
 	sl->tty = tty;
 	tty->disc_data = sl;
 	sl->pid = current->pid;
 
-	set_bit(SLF_INUSE, &sl->flags);
+	if (!test_bit(TT_FLAG_INUSE, &sl->flags)) {
+		set_bit(TT_FLAG_INUSE, &sl->flags);
 
-	err = sl_alloc_bufs(sl, TT_MTU);
-	if (err)
-		goto err_free_chan;
+		err = tt_alloc_bufs(sl, TT_MTU);
+		if (err)
+			goto err_free_chan;
 
-	err = register_netdevice(sl->dev);
-	if (err)
-		goto err_free_bufs;
+		err = register_netdevice(sl->dev);
+		if (err)
+			goto err_free_bufs;
 
+	} else {
+		printk(KERN_ERR "Channel is already in use");
+	}
 
 	/* Done.  We have linked the TTY line to a channel. */
 	rtnl_unlock();
@@ -626,13 +601,13 @@ static int tashtalk_open(struct tty_struct *tty)
 
 
 err_free_bufs:
-	sl_free_bufs(sl);
+	tt_free_bufs(sl);
 
 err_free_chan:
 	printk(KERN_ERR "TashTalk: could not open device");
 	sl->tty = NULL;
 	tty->disc_data = NULL;
-	clear_bit(SLF_INUSE, &sl->flags);
+	clear_bit(TT_FLAG_INUSE, &sl->flags);
 	
 	/* do not call free_netdev before rtnl_unlock */
 	rtnl_unlock();
@@ -646,17 +621,9 @@ err_exit:
 	return err;
 }
 
-/*
- * Close down a SLIP channel.
- * This means flushing out any pending queues, and then returning. This
- * call is serialized against other ldisc functions.
- *
- * We also use this method fo a hangup event
- */
-
 static void tashtalk_close(struct tty_struct *tty)
 {
-	struct slip *sl = tty->disc_data;
+	struct tashtalk *sl = tty->disc_data;
 
 	/* First make sure we're connected. */
 	if (!sl || sl->magic != TASH_MAGIC || sl->tty != tty)
@@ -673,7 +640,7 @@ static void tashtalk_close(struct tty_struct *tty)
 
 	/* Flush network side */
 	unregister_netdev(sl->dev);
-	/* This will complete via sl_free_netdev */
+	/* This will complete via tt_free_netdev */
 }
 
 #if LINUX_VERSION_CODE < KERNEL_VERSION(5,19,0)
@@ -689,7 +656,6 @@ static void tashtalk_hangup(struct tty_struct *tty)
 }
 
 
-/* Perform I/O control on an active SLIP channel. */
 #if LINUX_VERSION_CODE < KERNEL_VERSION(5,19,0)
 static int tashtalk_ioctl(struct tty_struct *tty, struct file *file, unsigned int cmd,
 #else
@@ -697,7 +663,7 @@ static int tashtalk_ioctl(struct tty_struct *tty, unsigned int cmd,
 #endif
 		unsigned long arg)
 {
-	struct slip *sl = tty->disc_data;
+	struct tashtalk *sl = tty->disc_data;
 	unsigned int tmp;
 	int __user *p = (int __user *)arg;
 
@@ -759,16 +725,16 @@ static int __init tashtalk_init(void)
 
 	printk(KERN_INFO "TashTalk Interface (dynamic channels, max=%d)", tash_maxdev);
 
-	slip_devs = kcalloc(tash_maxdev, sizeof(struct net_device *),
+	tastalk_devs = kcalloc(tash_maxdev, sizeof(struct net_device *),
 								GFP_KERNEL);
-	if (!slip_devs)
+	if (!tastalk_devs)
 		return -ENOMEM;
 
 	/* Fill in our line protocol discipline, and register it */
 	status = tty_register_ldisc(&tashtalk_ldisc);
 	if (status != 0) {
 		printk(KERN_ERR "TaskTalk: can't register line discipline (err = %d)\n", status);
-		kfree(slip_devs);
+		kfree(tastalk_devs);
 	}
 	return status;
 }
@@ -777,11 +743,11 @@ static void __exit tashtalk_exit(void)
 {
 	int i;
 	struct net_device *dev;
-	struct slip *sl;
+	struct tashtalk *sl;
 	unsigned long timeout = jiffies + HZ;
 	int busy = 0;
 
-	if (slip_devs == NULL)
+	if (tastalk_devs == NULL)
 		return;
 
 	/* First of all: check for active disciplines and hangup them.
@@ -792,7 +758,7 @@ static void __exit tashtalk_exit(void)
 
 		busy = 0;
 		for (i = 0; i < tash_maxdev; i++) {
-			dev = slip_devs[i];
+			dev = tastalk_devs[i];
 			if (!dev)
 				continue;
 			sl = netdev_priv(dev);
@@ -809,10 +775,10 @@ static void __exit tashtalk_exit(void)
 	   phase */
 
 	for (i = 0; i < tash_maxdev; i++) {
-		dev = slip_devs[i];
+		dev = tastalk_devs[i];
 		if (!dev)
 			continue;
-		slip_devs[i] = NULL;
+		tastalk_devs[i] = NULL;
 
 		sl = netdev_priv(dev);
 		if (sl->tty) {
@@ -823,8 +789,9 @@ static void __exit tashtalk_exit(void)
 		unregister_netdev(dev);
 	}
 
-	kfree(slip_devs);
-	slip_devs = NULL;
+
+	kfree(tastalk_devs);
+	tastalk_devs = NULL;
 
 	tty_unregister_ldisc(&tashtalk_ldisc);
 }
@@ -833,4 +800,4 @@ module_init(tashtalk_init);
 module_exit(tashtalk_exit);
 
 MODULE_LICENSE("GPL");
-MODULE_ALIAS_LDISC(N_SLIP);
+MODULE_ALIAS_LDISC(N_PPP);
