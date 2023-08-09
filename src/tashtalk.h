@@ -12,6 +12,8 @@
 #ifndef _LINUX_TASHTALK_H
 #define _LINUX_TASHTALK_H
 
+#include <linux/atalk.h>
+
 /* Max number of channels
  * override with insmod -otash_maxdev=nnn
  */
@@ -44,6 +46,7 @@ struct slip {
   unsigned char		mode;		/* really not used */
   pid_t			pid;
 
+  struct atalk_addr node_addr;	/* Full node address */
 };
 
 #define TASH_MAGIC 0xFFFA

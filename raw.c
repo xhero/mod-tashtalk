@@ -77,13 +77,13 @@ int main(int argc, char *argv[])
 
 	struct 	sockaddr_at at_sock_addr;
 	at_sock_addr.sat_family = AF_APPLETALK;
-	at_sock_addr.sat_port = 200;
+	at_sock_addr.sat_port = 0;
 	at_sock_addr.sat_addr.s_net = 0;
-	at_sock_addr.sat_addr.s_node = 127;
+	at_sock_addr.sat_addr.s_node = 2;
 
     nr.nr_phase = 1;
     nr.nr_firstnet = 0;
-    nr.nr_lastnet = 1;
+    nr.nr_lastnet = 0xFEFF;
 	memcpy( at_sock_addr.sat_zero, &nr, sizeof( struct netrange ));
 
 	ifconfig( ifName, SIOCSIFADDR, &at_sock_addr );
@@ -129,14 +129,29 @@ int main(int argc, char *argv[])
 
 	/* Construct the Ethernet header */
 	memset(sendbuf, 0, 128);
-	sendbuf[0] = 'H';
-	sendbuf[1] = 'e';
-	sendbuf[2] = 'l';
-	sendbuf[3] = 'l';
-	sendbuf[4] = 'o';
+	/*
+	sendbuf[0] = 0x00;
+	sendbuf[1] = 0x08;
+	sendbuf[2] = 0x25;
+	sendbuf[3] = 0x01;
+	sendbuf[4] = 'C';
+	sendbuf[5] = 'i';
+	sendbuf[6] = 'a';
+	sendbuf[7] = 'o';
+	sendbuf[8] = 0x08;
+	sendbuf[9] = 0x35;
+	*/
+
+	sendbuf[0] = 0x04; // AEP
+	sendbuf[1] = 0x01; // REQUEST
+
+	at_sock_addr.sat_family = AF_APPLETALK;
+	at_sock_addr.sat_port = 0;
+	at_sock_addr.sat_addr.s_net = 0;
+	at_sock_addr.sat_addr.s_node = 27;
 
 	/* Send packet */
-	if (sendto(sockfd, sendbuf, 5, 0, (struct sockaddr*)&at_sock_addr, sizeof(struct sockaddr_at)) < 0) {
+	if (sendto(sockfd, sendbuf, 2, 0, (struct sockaddr*)&at_sock_addr, sizeof(struct sockaddr_at)) < 0) {
 	   perror("pirillo"); 
 	   printf("Send failed\n");
 	} else {
