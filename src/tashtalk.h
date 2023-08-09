@@ -5,9 +5,9 @@
  * Version:	@(#)tasktalk.h	0.1	2023
  *
  * Based on slip.c by
- * Fred N. van Kempen, <waltje@uwalt.nl.mugnet.org>
+ * Laurence Culhane and Fred N. van Kempen
  *
- * Author: Rodolfo Zitellini
+ * Author: twelvetone12
  */
 #ifndef _LINUX_TASHTALK_H
 #define _LINUX_TASHTALK_H
@@ -48,6 +48,6 @@ struct tashtalk {
   struct atalk_addr node_addr;	/* Full node address */
 };
 
-#define TASH_MAGIC 0xFFFA
+#define TASH_MAGIC 0xFDFA
 
 #endif	/* _LINUX_TASHTALK_H.H */

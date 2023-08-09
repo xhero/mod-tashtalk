@@ -1,5 +1,19 @@
 // SPDX-License-Identifier: GPL-2.0-only
 
+/*      tashtalk.c: TashTalk LocalTalk driver for Linux.
+ *
+ *	Authors:
+ *      twelvetone12
+ *
+ *      Derived from:
+ *      - slip.c: A network driver outline for linux.
+ *        written by Laurence Culhane and Fred N. van Kempen
+ *
+ *      This software may be used and distributed according to the terms
+ *      of the GNU General Public License, incorporated herein by reference.
+ *
+ */
+
 #include <linux/compat.h>
 #include <linux/module.h>
 #include <linux/moduleparam.h>
@@ -29,7 +43,6 @@
 #ifdef CONFIG_INET
 #include <linux/ip.h>
 #include <linux/tcp.h>
-#include <net/slhc_vj.h>
 #endif
 
 static struct net_device **tastalk_devs;
@@ -58,26 +71,26 @@ u16 lt_crc[] = {
 };
 
 /* Set the "sending" flag.  This must be atomic hence the set_bit. */
-static inline void tt_lock_netif(struct tashtalk *sl)
+static inline void tt_lock_netif(struct tashtalk *tt)
 {
-	netif_stop_queue(sl->dev);
+	netif_stop_queue(tt->dev);
 }
 
 
 /* Clear the "sending" flag.  This must be atomic, hence the ASM. */
-static inline void tt_unlock_netif(struct tashtalk *sl)
+static inline void tt_unlock_netif(struct tashtalk *tt)
 {
-	netif_wake_queue(sl->dev);
+	netif_wake_queue(tt->dev);
 }
 
 /* Send one completely decapsulated IP datagram to the IP layer. */
-static void tt_post_to_netif(struct tashtalk *sl)
+static void tt_post_to_netif(struct tashtalk *tt)
 {
-	struct net_device *dev = sl->dev;
+	struct net_device *dev = tt->dev;
 	struct sk_buff *skb;
 	int count;
 
-	count = sl->rcount;
+	count = tt->rcount;
 
 	dev->stats.rx_bytes += count;
 
@@ -88,7 +101,7 @@ static void tt_post_to_netif(struct tashtalk *sl)
 		return;
 	}
 
-	skb_put_data(skb, sl->rbuff, count);
+	skb_put_data(skb, tt->rbuff, count);
 	skb->dev = dev;
     skb->protocol = htons(ETH_P_LOCALTALK);
 
@@ -101,26 +114,18 @@ static void tt_post_to_netif(struct tashtalk *sl)
 }
 
 /* Encapsulate one IP datagram and stuff into a TTY queue. */
-static void tt_send_frame(struct tashtalk *sl, unsigned char *icp, int len)
+static void tt_send_frame(struct tashtalk *tt, unsigned char *icp, int len)
 {
 	int actual;
 	char start = 0x01;
 
-	if (len > sl->mtu) {		/* Sigh, shouldn't occur BUT ... */
-		printk(KERN_WARNING "%s: truncating oversized transmit packet %i vs %i!\n", sl->dev->name, len, sl->mtu);
-		sl->dev->stats.tx_dropped++;
-		tt_unlock_netif(sl);
+	if (len > tt->mtu) {		/* Sigh, shouldn't occur BUT ... */
+		printk(KERN_WARNING "%s: truncating oversized transmit packet %i vs %i!\n", tt->dev->name, len, tt->mtu);
+		tt->dev->stats.tx_dropped++;
+		tt_unlock_netif(tt);
 		return;
 	}
 
-	/* Order of next two lines is *very* important.
-	 * When we are sending a little amount of data,
-	 * the transfer may be completed inside the ops->write()
-	 * routine, because it's running with interrupts enabled.
-	 * In this case we *never* got WRITE_WAKEUP event,
-	 * if we did not request it before write operation.
-	 *       14 Oct 1994  Dmitry Gorodchanin.
-	 */
 
 	// make the crc
 	u16 crc = 0xFFFF;
@@ -136,42 +141,50 @@ static void tt_send_frame(struct tashtalk *sl, unsigned char *icp, int len)
 
 	printk(KERN_WARNING "CRC %x", crc);
 
-	set_bit(TTY_DO_WRITE_WAKEUP, &sl->tty->flags);
-	actual = sl->tty->ops->write(sl->tty, &start, 1);
-	actual += sl->tty->ops->write(sl->tty, icp, len);
-	actual += sl->tty->ops->write(sl->tty, crc_bytes, 2);
+	/* Order of next two lines is *very* important.
+	 * When we are sending a little amount of data,
+	 * the transfer may be completed inside the ops->write()
+	 * routine, because it's running with interrupts enabled.
+	 * In this case we *never* got WRITE_WAKEUP event,
+	 * if we did not request it before write operation.
+	 *       14 Oct 1994  Dmitry Gorodchanin.
+	 */
+	set_bit(TTY_DO_WRITE_WAKEUP, &tt->tty->flags);
+	actual = tt->tty->ops->write(tt->tty, &start, 1);
+	actual += tt->tty->ops->write(tt->tty, icp, len);
+	actual += tt->tty->ops->write(tt->tty, crc_bytes, 2);
 
 	printk(KERN_WARNING "Trasmit to TASH %i", actual);
-	tt_unlock_netif(sl);
+	tt_unlock_netif(tt);
 }
 
 /* Write out any remaining transmit buffer. Scheduled when tty is writable */
 static void tash_transmit_worker(struct work_struct *work)
 {
-	struct tashtalk *sl = container_of(work, struct tashtalk, tx_work);
+	struct tashtalk *tt = container_of(work, struct tashtalk, tx_work);
 	int actual;
 
-	spin_lock_bh(&sl->lock);
+	spin_lock_bh(&tt->lock);
 	/* First make sure we're connected. */
-	if (!sl->tty || sl->magic != TASH_MAGIC || !netif_running(sl->dev)) {
-		spin_unlock_bh(&sl->lock);
+	if (!tt->tty || tt->magic != TASH_MAGIC || !netif_running(tt->dev)) {
+		spin_unlock_bh(&tt->lock);
 		return;
 	}
 
-	if (sl->xleft <= 0)  {
+	if (tt->xleft <= 0)  {
 		/* Now serial buffer is almost free & we can start
 		 * transmission of another packet */
-		sl->dev->stats.tx_packets++;
-		clear_bit(TTY_DO_WRITE_WAKEUP, &sl->tty->flags);
-		spin_unlock_bh(&sl->lock);
-		tt_unlock_netif(sl);
+		tt->dev->stats.tx_packets++;
+		clear_bit(TTY_DO_WRITE_WAKEUP, &tt->tty->flags);
+		spin_unlock_bh(&tt->lock);
+		tt_unlock_netif(tt);
 		return;
 	}
 
-	actual = sl->tty->ops->write(sl->tty, sl->xhead, sl->xleft);
-	sl->xleft -= actual;
-	sl->xhead += actual;
-	spin_unlock_bh(&sl->lock);
+	actual = tt->tty->ops->write(tt->tty, tt->xhead, tt->xleft);
+	tt->xleft -= actual;
+	tt->xhead += actual;
+	spin_unlock_bh(&tt->lock);
 }
 
 /*
@@ -180,27 +193,27 @@ static void tash_transmit_worker(struct work_struct *work)
  */
 static void tashtalk_write_wakeup(struct tty_struct *tty)
 {
-	struct tashtalk *sl;
+	struct tashtalk *tt;
 
 	rcu_read_lock();
-	sl = rcu_dereference(tty->disc_data);
-	if (sl)
-		schedule_work(&sl->tx_work);
+	tt = rcu_dereference(tty->disc_data);
+	if (tt)
+		schedule_work(&tt->tx_work);
 	rcu_read_unlock();
 }
 
 static void tt_tx_timeout(struct net_device *dev, unsigned int txqueue)
 {
-	struct tashtalk *sl = netdev_priv(dev);
+	struct tashtalk *tt = netdev_priv(dev);
 
-	spin_lock(&sl->lock);
+	spin_lock(&tt->lock);
 
 	if (netif_queue_stopped(dev)) {
-		if (!netif_running(dev) || !sl->tty)
+		if (!netif_running(dev) || !tt->tty)
 			goto out;
 	}
 out:
-	spin_unlock(&sl->lock);
+	spin_unlock(&tt->lock);
 }
 
 
@@ -208,28 +221,28 @@ out:
 static netdev_tx_t
 tt_transmit(struct sk_buff *skb, struct net_device *dev)
 {
-	struct tashtalk *sl = netdev_priv(dev);
+	struct tashtalk *tt = netdev_priv(dev);
 
 	printk(KERN_ERR "TashTalk: send data on %s\n", dev->name);
 
-	spin_lock(&sl->lock);
+	spin_lock(&tt->lock);
 	if (!netif_running(dev)) {
-		spin_unlock(&sl->lock);
+		spin_unlock(&tt->lock);
 		printk(KERN_WARNING "%s: xmit call when iface is down\n", dev->name);
 		dev_kfree_skb(skb);
 		return NETDEV_TX_OK;
 	}
-	if (sl->tty == NULL) {
-		spin_unlock(&sl->lock);
+	if (tt->tty == NULL) {
+		spin_unlock(&tt->lock);
 		dev_kfree_skb(skb);
 		printk(KERN_WARNING "%s: mumble!\n", dev->name);
 		return NETDEV_TX_OK;
 	}
 
-	tt_lock_netif(sl);
+	tt_lock_netif(tt);
 	dev->stats.tx_bytes += skb->len;
-	tt_send_frame(sl, skb->data, skb->len);
-	spin_unlock(&sl->lock);
+	tt_send_frame(tt, skb->data, skb->len);
+	spin_unlock(&tt->lock);
 
 	dev_kfree_skb(skb);
 	return NETDEV_TX_OK;
@@ -245,16 +258,16 @@ tt_transmit(struct sk_buff *skb, struct net_device *dev)
 static int
 tt_close(struct net_device *dev)
 {
-	struct tashtalk *sl = netdev_priv(dev);
+	struct tashtalk *tt = netdev_priv(dev);
 
-	spin_lock_bh(&sl->lock);
-	if (sl->tty)
+	spin_lock_bh(&tt->lock);
+	if (tt->tty)
 		/* TTY discipline is running. */
-		clear_bit(TTY_DO_WRITE_WAKEUP, &sl->tty->flags);
+		clear_bit(TTY_DO_WRITE_WAKEUP, &tt->tty->flags);
 	netif_stop_queue(dev);
-	sl->rcount   = 0;
-	sl->xleft    = 0;
-	spin_unlock_bh(&sl->lock);
+	tt->rcount   = 0;
+	tt->xleft    = 0;
+	spin_unlock_bh(&tt->lock);
 
 	return 0;
 }
@@ -263,14 +276,14 @@ tt_close(struct net_device *dev)
 
 static int tt_open(struct net_device *dev)
 {
-	struct tashtalk *sl = netdev_priv(dev);
+	struct tashtalk *tt = netdev_priv(dev);
 
 	printk(KERN_ERR "Loaded tash netdevice");
 
-	if (sl->tty == NULL)
+	if (tt->tty == NULL)
 		return -ENODEV;
 
-	sl->flags &= (1 << TT_FLAG_INUSE);
+	tt->flags &= (1 << TT_FLAG_INUSE);
 	netif_start_queue(dev);
 	return 0;
 }
@@ -296,9 +309,9 @@ tt_get_stats64(struct net_device *dev, struct rtnl_link_stats64 *stats)
 
 static int tt_ioctl(struct net_device *dev, struct ifreq *ifr, int cmd)
 {
-		struct tashtalk *sl = netdev_priv(dev);
+		struct tashtalk *tt = netdev_priv(dev);
         struct sockaddr_at *sa = (struct sockaddr_at *)&ifr->ifr_addr;
-        struct atalk_addr *aa = &sl->node_addr;
+        struct atalk_addr *aa = &tt->node_addr;
 
         switch(cmd)
         {
@@ -360,49 +373,49 @@ static const struct net_device_ops tt_netdev_ops = {
 static void tashtalk_receive_buf(struct tty_struct *tty, const unsigned char *cp,
 		const char *fp, int count)
 {
-	struct tashtalk *sl = tty->disc_data;
-	//struct net_device *dev = sl->dev;
+	struct tashtalk *tt = tty->disc_data;
+	//struct net_device *dev = tt->dev;
 	int i;
 
-	if (!sl || sl->magic != TASH_MAGIC || !netif_running(sl->dev))
+	if (!tt || tt->magic != TASH_MAGIC || !netif_running(tt->dev))
 		return;
 
 	printk(KERN_ERR "Tash read %i", count);
     print_hex_dump_bytes("Tash read: ", DUMP_PREFIX_NONE, cp, count);
 
-	if (!test_bit(TT_FLAG_ESCAPE, &sl->flags))
-		sl->rcount = 0;
+	if (!test_bit(TT_FLAG_ESCAPE, &tt->flags))
+		tt->rcount = 0;
 
 	for (i = 0; i < count; i++) {
 
 		if (cp[i] == 0x00) {
-			set_bit(TT_FLAG_ESCAPE, &sl->flags);
+			set_bit(TT_FLAG_ESCAPE, &tt->flags);
 			continue;
 		}
 
-		if (test_and_clear_bit(TT_FLAG_ESCAPE, &sl->flags)) {
+		if (test_and_clear_bit(TT_FLAG_ESCAPE, &tt->flags)) {
 			if (cp[i] == 0xFF) {
-				sl->rbuff[sl->rcount] = 0x00;
-				sl->rcount++;
+				tt->rbuff[tt->rcount] = 0x00;
+				tt->rcount++;
 			} else if (cp[i] == 0xFD) {
-				printk(KERN_ERR "Tash done frame %i", sl->rcount);
-				tt_post_to_netif(sl);
-				sl->rcount = 0;
+				printk(KERN_ERR "Tash done frame %i", tt->rcount);
+				tt_post_to_netif(tt);
+				tt->rcount = 0;
 			} else if (cp[i] == 0xFE) {
 				printk(KERN_ERR "Tash frame error");
-				sl->rcount = 0;
+				tt->rcount = 0;
 			} else if (cp[i] == 0xFA) {
 				printk(KERN_ERR "Tash frame abort");
-				sl->rcount = 0;
+				tt->rcount = 0;
 			} else if (cp[i] == 0xFC) {
 				printk(KERN_ERR "Tash frame crc error");
-				sl->rcount = 0;
+				tt->rcount = 0;
 			} else {
 				printk(KERN_ERR "Tash escape unknown %c", cp[i]);
 			}
 		} else {
-			sl->rbuff[sl->rcount] = cp[i];
-			sl->rcount++;
+			tt->rbuff[tt->rcount] = cp[i];
+			tt->rcount++;
 		}
 
 	}
@@ -431,13 +444,13 @@ static void tashtalk_receive_buf(struct tty_struct *tty, const unsigned char *cp
 }
 
 /* Free a channel buffers. */
-static void tt_free_bufs(struct tashtalk *sl)
+static void tt_free_bufs(struct tashtalk *tt)
 {
-	kfree(xchg(&sl->rbuff, NULL));
-	kfree(xchg(&sl->xbuff, NULL));
+	kfree(xchg(&tt->rbuff, NULL));
+	kfree(xchg(&tt->xbuff, NULL));
 }
 
-static int tt_alloc_bufs(struct tashtalk *sl, int mtu)
+static int tt_alloc_bufs(struct tashtalk *tt, int mtu)
 {
 	int err = -ENOBUFS;
 	unsigned long len;
@@ -455,22 +468,22 @@ static int tt_alloc_bufs(struct tashtalk *sl, int mtu)
 	if (xbuff == NULL)
 		goto err_exit;
 
-	spin_lock_bh(&sl->lock);
-	if (sl->tty == NULL) {
-		spin_unlock_bh(&sl->lock);
+	spin_lock_bh(&tt->lock);
+	if (tt->tty == NULL) {
+		spin_unlock_bh(&tt->lock);
 		err = -ENODEV;
 		goto err_exit;
 	}
 
-	sl->mtu	     = mtu;
-	sl->buffsize = len;
-	sl->rcount   = 0;
-	sl->xleft    = 0;
+	tt->mtu	     = mtu;
+	tt->buffsize = len;
+	tt->rcount   = 0;
+	tt->xleft    = 0;
 
-	rbuff = xchg(&sl->rbuff, rbuff);
-	xbuff = xchg(&sl->xbuff, xbuff);
+	rbuff = xchg(&tt->rbuff, rbuff);
+	xbuff = xchg(&tt->xbuff, xbuff);
 
-	spin_unlock_bh(&sl->lock);
+	spin_unlock_bh(&tt->lock);
 	err = 0;
 
 	/* Cleanup */
@@ -486,7 +499,7 @@ static struct tashtalk *tt_alloc(void)
 {
 	int i;
 	struct net_device *dev = NULL;
-	struct tashtalk       *sl;
+	struct tashtalk       *tt;
 
 	for (i = 0; i < tash_maxdev; i++) {
 		dev = tastalk_devs[i];
@@ -500,7 +513,7 @@ static struct tashtalk *tt_alloc(void)
 	}
 	
 	/* Also assigns the default lt* name */
-	dev = alloc_ltalkdev(sizeof(*sl));
+	dev = alloc_ltalkdev(sizeof(*tt));
 
 	if (!dev) {
 		printk(KERN_ERR "TashTalk: could not allocate ltalkdev");
@@ -508,23 +521,23 @@ static struct tashtalk *tt_alloc(void)
 	}
 
 	dev->base_addr  = i;
-	sl = netdev_priv(dev);
+	tt = netdev_priv(dev);
 
 	/* Initialize channel control data */
-	sl->magic = TASH_MAGIC;
-	sl->dev = dev;
-	sl->mtu = TT_MTU;
-	sl->mode = 0; /*Maybe useful in the future? */
+	tt->magic = TASH_MAGIC;
+	tt->dev = dev;
+	tt->mtu = TT_MTU;
+	tt->mode = 0; /*Maybe useful in the future? */
 
-	sl->dev->netdev_ops = &tt_netdev_ops;
-	sl->dev->type =  ARPHRD_LOCALTLK;
-	sl->dev->priv_destructor = tt_free_netdev;
+	tt->dev->netdev_ops = &tt_netdev_ops;
+	tt->dev->type =  ARPHRD_LOCALTLK;
+	tt->dev->priv_destructor = tt_free_netdev;
 
-	spin_lock_init(&sl->lock);
-	INIT_WORK(&sl->tx_work, tash_transmit_worker);
+	spin_lock_init(&tt->lock);
+	INIT_WORK(&tt->tx_work, tash_transmit_worker);
 
 	tastalk_devs[i] = dev;
-	return sl;
+	return tt;
 }
 
 /*
@@ -535,7 +548,7 @@ static struct tashtalk *tt_alloc(void)
 
 static int tashtalk_open(struct tty_struct *tty)
 {
-	struct tashtalk *sl;
+	struct tashtalk *tt;
 	int err;
 
 	if (!capable(CAP_NET_ADMIN))
@@ -550,31 +563,31 @@ static int tashtalk_open(struct tty_struct *tty)
 	 */
 	rtnl_lock();
 
-	sl = tty->disc_data;
+	tt = tty->disc_data;
 
 	err = -EEXIST;
 	/* First make sure we're not already connected. */
-	if (sl && sl->magic == TASH_MAGIC)
+	if (tt && tt->magic == TASH_MAGIC)
 		goto err_exit;
 
 	err = -ENFILE;
 
-	sl = tt_alloc();
-	if (sl == NULL)
+	tt = tt_alloc();
+	if (tt == NULL)
 		goto err_exit;
 
-	sl->tty = tty;
-	tty->disc_data = sl;
-	sl->pid = current->pid;
+	tt->tty = tty;
+	tty->disc_data = tt;
+	tt->pid = current->pid;
 
-	if (!test_bit(TT_FLAG_INUSE, &sl->flags)) {
-		set_bit(TT_FLAG_INUSE, &sl->flags);
+	if (!test_bit(TT_FLAG_INUSE, &tt->flags)) {
+		set_bit(TT_FLAG_INUSE, &tt->flags);
 
-		err = tt_alloc_bufs(sl, TT_MTU);
+		err = tt_alloc_bufs(tt, TT_MTU);
 		if (err)
 			goto err_free_chan;
 
-		err = register_netdevice(sl->dev);
+		err = register_netdevice(tt->dev);
 		if (err)
 			goto err_free_bufs;
 
@@ -593,7 +606,7 @@ static int tashtalk_open(struct tty_struct *tty)
 
 	conf[1] = 0x04;
 	//conf[32] = 0xFE;
-	sl->tty->ops->write(sl->tty, conf, 33);
+	tt->tty->ops->write(tt->tty, conf, 33);
 
 	/* TTY layer expects 0 on success */
 	printk(KERN_INFO "TashTalk is on port %s", tty->name);
@@ -601,17 +614,17 @@ static int tashtalk_open(struct tty_struct *tty)
 
 
 err_free_bufs:
-	tt_free_bufs(sl);
+	tt_free_bufs(tt);
 
 err_free_chan:
 	printk(KERN_ERR "TashTalk: could not open device");
-	sl->tty = NULL;
+	tt->tty = NULL;
 	tty->disc_data = NULL;
-	clear_bit(TT_FLAG_INUSE, &sl->flags);
+	clear_bit(TT_FLAG_INUSE, &tt->flags);
 	
 	/* do not call free_netdev before rtnl_unlock */
 	rtnl_unlock();
-	free_netdev(sl->dev);
+	free_netdev(tt->dev);
 	return err;
 
 err_exit:
@@ -623,23 +636,23 @@ err_exit:
 
 static void tashtalk_close(struct tty_struct *tty)
 {
-	struct tashtalk *sl = tty->disc_data;
+	struct tashtalk *tt = tty->disc_data;
 
 	/* First make sure we're connected. */
-	if (!sl || sl->magic != TASH_MAGIC || sl->tty != tty)
+	if (!tt || tt->magic != TASH_MAGIC || tt->tty != tty)
 		return;
 
-	spin_lock_bh(&sl->lock);
+	spin_lock_bh(&tt->lock);
 	rcu_assign_pointer(tty->disc_data, NULL);
-	sl->tty = NULL;
-	spin_unlock_bh(&sl->lock);
+	tt->tty = NULL;
+	spin_unlock_bh(&tt->lock);
 
 	synchronize_rcu();
-	flush_work(&sl->tx_work);
+	flush_work(&tt->tx_work);
 
 
 	/* Flush network side */
-	unregister_netdev(sl->dev);
+	unregister_netdev(tt->dev);
 	/* This will complete via tt_free_netdev */
 }
 
@@ -663,31 +676,31 @@ static int tashtalk_ioctl(struct tty_struct *tty, unsigned int cmd,
 #endif
 		unsigned long arg)
 {
-	struct tashtalk *sl = tty->disc_data;
+	struct tashtalk *tt = tty->disc_data;
 	unsigned int tmp;
 	int __user *p = (int __user *)arg;
 
 	/* First make sure we're connected. */
-	if (!sl || sl->magic != TASH_MAGIC)
+	if (!tt || tt->magic != TASH_MAGIC)
 		return -EINVAL;
 
 	switch (cmd) {
 	case SIOCGIFNAME:
-		tmp = strlen(sl->dev->name) + 1;
-		if (copy_to_user((void __user *)arg, sl->dev->name, tmp))
+		tmp = strlen(tt->dev->name) + 1;
+		if (copy_to_user((void __user *)arg, tt->dev->name, tmp))
 			return -EFAULT;
 		return 0;
 
 	// do we need mode?
 	case SIOCGIFENCAP:
-		if (put_user(sl->mode, p))
+		if (put_user(tt->mode, p))
 			return -EFAULT;
 		return 0;
 
 	case SIOCSIFENCAP:
 		if (get_user(tmp, p))
 			return -EFAULT;
-		sl->mode = tmp;
+		tt->mode = tmp;
 		return 0;
 
 	case SIOCSIFHWADDR:
@@ -743,7 +756,7 @@ static void __exit tashtalk_exit(void)
 {
 	int i;
 	struct net_device *dev;
-	struct tashtalk *sl;
+	struct tashtalk *tt;
 	unsigned long timeout = jiffies + HZ;
 	int busy = 0;
 
@@ -761,13 +774,13 @@ static void __exit tashtalk_exit(void)
 			dev = tastalk_devs[i];
 			if (!dev)
 				continue;
-			sl = netdev_priv(dev);
-			spin_lock_bh(&sl->lock);
-			if (sl->tty) {
+			tt = netdev_priv(dev);
+			spin_lock_bh(&tt->lock);
+			if (tt->tty) {
 				busy++;
-				tty_hangup(sl->tty);
+				tty_hangup(tt->tty);
 			}
-			spin_unlock_bh(&sl->lock);
+			spin_unlock_bh(&tt->lock);
 		}
 	} while (busy && time_before(jiffies, timeout));
 
@@ -780,8 +793,8 @@ static void __exit tashtalk_exit(void)
 			continue;
 		tastalk_devs[i] = NULL;
 
-		sl = netdev_priv(dev);
-		if (sl->tty) {
+		tt = netdev_priv(dev);
+		if (tt->tty) {
 			printk(KERN_ERR "%s: tty discipline still running\n",
 			       dev->name);
 		}
