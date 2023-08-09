@@ -179,7 +179,7 @@ static void slip_transmit(struct work_struct *work)
  * Called by the driver when there's room for more data.
  * Schedule the transmit.
  */
-static void slip_write_wakeup(struct tty_struct *tty)
+static void tashtalk_write_wakeup(struct tty_struct *tty)
 {
 	struct slip *sl;
 
@@ -190,7 +190,7 @@ static void slip_write_wakeup(struct tty_struct *tty)
 	rcu_read_unlock();
 }
 
-static void sl_tx_timeout(struct net_device *dev, unsigned int txqueue)
+static void tt_tx_timeout(struct net_device *dev, unsigned int txqueue)
 {
 	struct slip *sl = netdev_priv(dev);
 
@@ -207,7 +207,7 @@ out:
 
 /* Encapsulate an IP datagram and kick it into a TTY queue. */
 static netdev_tx_t
-sl_xmit(struct sk_buff *skb, struct net_device *dev)
+tt_transmit(struct sk_buff *skb, struct net_device *dev)
 {
 	struct slip *sl = netdev_priv(dev);
 
@@ -244,7 +244,7 @@ sl_xmit(struct sk_buff *skb, struct net_device *dev)
 /* Netdevice UP -> DOWN routine */
 
 static int
-sl_close(struct net_device *dev)
+tt_close(struct net_device *dev)
 {
 	struct slip *sl = netdev_priv(dev);
 
@@ -262,7 +262,7 @@ sl_close(struct net_device *dev)
 
 /* Netdevice DOWN -> UP routine */
 
-static int sl_open(struct net_device *dev)
+static int tt_open(struct net_device *dev)
 {
 	struct slip *sl = netdev_priv(dev);
 
@@ -280,7 +280,7 @@ static int sl_open(struct net_device *dev)
 /* Netdevice get statistics request */
 
 static void
-sl_get_stats64(struct net_device *dev, struct rtnl_link_stats64 *stats)
+tt_get_stats64(struct net_device *dev, struct rtnl_link_stats64 *stats)
 {
 	struct net_device_stats *devstats = &dev->stats;
 
@@ -342,12 +342,12 @@ static void tt_set_multicast(struct net_device *dev)
 		printk(KERN_ERR "TashTalk %s: set_multicast_list executed\n", dev->name);
 }
 
-static const struct net_device_ops sl_netdev_ops = {
-	.ndo_open			= sl_open,
-	.ndo_stop			= sl_close,
-	.ndo_start_xmit		= sl_xmit,
-	.ndo_get_stats64    = sl_get_stats64,
-	.ndo_tx_timeout		= sl_tx_timeout,
+static const struct net_device_ops tt_netdev_ops = {
+	.ndo_open			= tt_open,
+	.ndo_stop			= tt_close,
+	.ndo_start_xmit		= tt_transmit,
+	.ndo_get_stats64    = tt_get_stats64,
+	.ndo_tx_timeout		= tt_tx_timeout,
 	.ndo_do_ioctl       = tt_ioctl,
 	.ndo_set_rx_mode	= tt_set_multicast,
 };
@@ -368,7 +368,7 @@ static const struct net_device_ops sl_netdev_ops = {
  * in parallel
  */
 
-static void slip_receive_buf(struct tty_struct *tty, const unsigned char *cp,
+static void tashtalk_receive_buf(struct tty_struct *tty, const unsigned char *cp,
 		const char *fp, int count)
 {
 	struct slip *sl = tty->disc_data;
@@ -539,7 +539,7 @@ static struct slip *tt_alloc(void)
 	sl->mtu = TT_MTU;
 	sl->mode = 0; /*Maybe useful in the future? */
 
-	sl->dev->netdev_ops = &sl_netdev_ops;
+	sl->dev->netdev_ops = &tt_netdev_ops;
 	sl->dev->type =  ARPHRD_LOCALTLK;
 	sl->dev->priv_destructor = sl_free_netdev;
 
@@ -560,7 +560,7 @@ static struct slip *tt_alloc(void)
  * Called in process context serialized from other ldisc calls.
  */
 
-static int slip_open(struct tty_struct *tty)
+static int tashtalk_open(struct tty_struct *tty)
 {
 	struct slip *sl;
 	int err;
@@ -654,7 +654,7 @@ err_exit:
  * We also use this method fo a hangup event
  */
 
-static void slip_close(struct tty_struct *tty)
+static void tashtalk_close(struct tty_struct *tty)
 {
 	struct slip *sl = tty->disc_data;
 
@@ -677,12 +677,12 @@ static void slip_close(struct tty_struct *tty)
 }
 
 #if LINUX_VERSION_CODE < KERNEL_VERSION(5,19,0)
-static int slip_hangup(struct tty_struct *tty)
+static int tashtalk_hangup(struct tty_struct *tty)
 #else
-static void slip_hangup(struct tty_struct *tty)
+static void tashtalk_hangup(struct tty_struct *tty)
 #endif
 {
-	slip_close(tty);
+	tashtalk_close(tty);
 #if LINUX_VERSION_CODE < KERNEL_VERSION(5,19,0)
 	return 0;
 #endif
@@ -691,9 +691,9 @@ static void slip_hangup(struct tty_struct *tty)
 
 /* Perform I/O control on an active SLIP channel. */
 #if LINUX_VERSION_CODE < KERNEL_VERSION(5,19,0)
-static int slip_ioctl(struct tty_struct *tty, struct file *file, unsigned int cmd,
+static int tashtalk_ioctl(struct tty_struct *tty, struct file *file, unsigned int cmd,
 #else
-static int slip_ioctl(struct tty_struct *tty, unsigned int cmd,
+static int tashtalk_ioctl(struct tty_struct *tty, unsigned int cmd,
 #endif
 		unsigned long arg)
 {
@@ -738,19 +738,19 @@ static int slip_ioctl(struct tty_struct *tty, unsigned int cmd,
 
 
 
-static struct tty_ldisc_ops sl_ldisc = {
+static struct tty_ldisc_ops tashtalk_ldisc = {
 	.owner 		= THIS_MODULE,
 	.num		= N_PPP,//N_SLIP,
 	.name 		= "tasktalk",
-	.open 		= slip_open,
-	.close	 	= slip_close,
-	.hangup	 	= slip_hangup,
-	.ioctl		= slip_ioctl,
-	.receive_buf	= slip_receive_buf,
-	.write_wakeup	= slip_write_wakeup,
+	.open 		= tashtalk_open,
+	.close	 	= tashtalk_close,
+	.hangup	 	= tashtalk_hangup,
+	.ioctl		= tashtalk_ioctl,
+	.receive_buf	= tashtalk_receive_buf,
+	.write_wakeup	= tashtalk_write_wakeup,
 };
 
-static int __init slip_init(void)
+static int __init tashtalk_init(void)
 {
 	int status;
 
@@ -765,7 +765,7 @@ static int __init slip_init(void)
 		return -ENOMEM;
 
 	/* Fill in our line protocol discipline, and register it */
-	status = tty_register_ldisc(&sl_ldisc);
+	status = tty_register_ldisc(&tashtalk_ldisc);
 	if (status != 0) {
 		printk(KERN_ERR "TaskTalk: can't register line discipline (err = %d)\n", status);
 		kfree(slip_devs);
@@ -773,7 +773,7 @@ static int __init slip_init(void)
 	return status;
 }
 
-static void __exit slip_exit(void)
+static void __exit tashtalk_exit(void)
 {
 	int i;
 	struct net_device *dev;
@@ -826,11 +826,11 @@ static void __exit slip_exit(void)
 	kfree(slip_devs);
 	slip_devs = NULL;
 
-	tty_unregister_ldisc(&sl_ldisc);
+	tty_unregister_ldisc(&tashtalk_ldisc);
 }
 
-module_init(slip_init);
-module_exit(slip_exit);
+module_init(tashtalk_init);
+module_exit(tashtalk_exit);
 
 MODULE_LICENSE("GPL");
 MODULE_ALIAS_LDISC(N_SLIP);
