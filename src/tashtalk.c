@@ -105,9 +105,9 @@ static void tt_post_to_netif(struct tashtalk *tt)
 	skb->dev = dev;
     skb->protocol = htons(ETH_P_LOCALTALK);
 
-	//skb_reset_mac_header(skb);    /* Point to entire packet. */
-    //skb_pull(skb, 3);
-    //skb_reset_transport_header(skb);    /* Point to data (Skip header). */
+	skb_reset_mac_header(skb);    /* Point to entire packet. */
+    skb_pull(skb, 3);
+    skb_reset_transport_header(skb);    /* Point to data (Skip header). */
 
 	netif_rx(skb);
 	dev->stats.rx_packets++;
@@ -126,7 +126,6 @@ static void tt_send_frame(struct tashtalk *tt, unsigned char *icp, int len)
 		return;
 	}
 
-
 	// make the crc
 	u16 crc = 0xFFFF;
 	unsigned char crc_bytes[2];
@@ -136,8 +135,8 @@ static void tt_send_frame(struct tashtalk *tt, unsigned char *icp, int len)
     	crc = lt_crc[index] ^ (crc >> 8);
 	}
 
-	crc_bytes[1] = (crc & 0xFF) ^ 0xFF;
-	crc_bytes[0] = (crc >> 8) ^ 0xFF;
+	crc_bytes[0] = (crc & 0xFF) ^ 0xFF;
+	crc_bytes[1] = (crc >> 8) ^ 0xFF;
 
 	printk(KERN_WARNING "CRC %x", crc);
 
@@ -153,6 +152,8 @@ static void tt_send_frame(struct tashtalk *tt, unsigned char *icp, int len)
 	actual = tt->tty->ops->write(tt->tty, &start, 1);
 	actual += tt->tty->ops->write(tt->tty, icp, len);
 	actual += tt->tty->ops->write(tt->tty, crc_bytes, 2);
+
+	print_hex_dump_bytes("LLAP OUT frame sans CRC: ", DUMP_PREFIX_NONE, icp, len);
 
 	printk(KERN_WARNING "Trasmit to TASH %i", actual);
 	tt_unlock_netif(tt);
@@ -399,6 +400,8 @@ static void tashtalk_receive_buf(struct tty_struct *tty, const unsigned char *cp
 				tt->rcount++;
 			} else if (cp[i] == 0xFD) {
 				printk(KERN_ERR "Tash done frame %i", tt->rcount);
+				// echo 'file tashtalk.c line 403 +p' > /sys/kernel/debug/dynamic_debug/control
+				print_hex_dump_bytes("LLAP IN frame: ", DUMP_PREFIX_NONE, tt->rbuff, tt->rcount);
 				tt_post_to_netif(tt);
 				tt->rcount = 0;
 			} else if (cp[i] == 0xFE) {
@@ -599,14 +602,20 @@ static int tashtalk_open(struct tty_struct *tty)
 	rtnl_unlock();
 	tty->receive_room = 65536;	/* We don't flow control */
 
-	unsigned char conf[33];
-	conf[0] = 0x02;
-	for (int i = 1; i < 33; i++)
-		conf[i] = 0x00;
+	unsigned char conf[32];
+	memset(conf, 0, 32);
 
-	conf[1] = 0x04;
-	//conf[32] = 0xFE;
-	tt->tty->ops->write(tt->tty, conf, 33);
+
+	conf[0] = 0xFE;
+/*
+	conf[1] = 0xFF;
+	conf[2] = 0xFF;
+	conf[3] = 0xFF;
+	conf[4] = 0xFF;
+*/
+	char command = 0x02;
+	tt->tty->ops->write(tt->tty, &command, 1);
+	tt->tty->ops->write(tt->tty, conf, 32);
 
 	/* TTY layer expects 0 on success */
 	printk(KERN_INFO "TashTalk is on port %s", tty->name);

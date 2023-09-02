@@ -37,7 +37,7 @@ int ifconfig( const char *iname, unsigned long cmd, struct sockaddr_at *sa)
     strcpy( ifr.ifr_name, iname );
     ifr.ifr_addr = *(struct sockaddr *)sa;
 
-    if (( s = socket( AF_APPLETALK, SOCK_DGRAM, 0 )) < 0 ) {
+    if (( s = socket( AF_APPLETALK, SOCK_RAW, 0 )) < 0 ) {
 		perror("socket");
 		return( 1 );
     }
@@ -81,11 +81,11 @@ int main(int argc, char *argv[])
 	at_sock_addr.sat_addr.s_net = 0;
 	at_sock_addr.sat_addr.s_node = 2;
 
-    nr.nr_phase = 1;
+   /* nr.nr_phase = 1;
     nr.nr_firstnet = 0;
     nr.nr_lastnet = 0xFEFF;
 	memcpy( at_sock_addr.sat_zero, &nr, sizeof( struct netrange ));
-
+*/
 	ifconfig( ifName, SIOCSIFADDR, &at_sock_addr );
 	ifconfig( ifName, SIOCGIFADDR, &at_sock_addr );
 
@@ -157,6 +157,8 @@ int main(int argc, char *argv[])
 	} else {
 		printf("sent\n");
 	}
+
+	close(sockfd);
 
 	return 0;
 }
