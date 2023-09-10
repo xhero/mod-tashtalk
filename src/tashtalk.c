@@ -70,6 +70,31 @@ u16 lt_crc[] = {
   0xF78F, 0xE606, 0xD49D, 0xC514, 0xB1AB, 0xA022, 0x92B9, 0x8330, 0x7BC7, 0x6A4E, 0x58D5, 0x495C, 0x3DE3, 0x2C6A, 0x1EF1, 0x0F78,
 };
 
+static void tash_setbits(struct tashtalk *tt, unsigned char addr) {
+	unsigned char bits[33];
+	unsigned char command = 0x02;
+	unsigned int byte, pos;
+
+	// 0, 255 and anything else are invalid
+	if (addr == 0 || addr >= 255)
+		return;
+
+	memset(bits, 0, sizeof(bits));
+
+	// in theory we can respond to many addresses
+	byte = addr / 8 + 1; // skip initial command byte
+	pos = (addr % 8);
+
+	printk("TASH setting address %i (byte %i bit %i) for you.", addr, byte - 1, pos);
+
+	bits[0] = 0x02; // the command
+	bits[byte] = (1<<pos);
+
+	set_bit(TTY_DO_WRITE_WAKEUP, &tt->tty->flags);
+	tt->tty->ops->write(tt->tty, bits, sizeof(bits));
+}
+
+
 /* Set the "sending" flag.  This must be atomic hence the set_bit. */
 static inline void tt_lock_netif(struct tashtalk *tt)
 {
@@ -94,7 +119,7 @@ static void tt_post_to_netif(struct tashtalk *tt)
 
 	dev->stats.rx_bytes += count;
 
-	skb = dev_alloc_skb(count);
+	skb = dev_alloc_skb(count + 20);
 	if (skb == NULL) {
 		printk(KERN_WARNING "%s: memory squeeze, dropping packet.\n", dev->name);
 		dev->stats.rx_dropped++;
@@ -326,6 +351,10 @@ static int tt_ioctl(struct net_device *dev, struct ifreq *ifr, int cmd)
 				/* Set hardware address. */
                 dev->addr_len = 1;
 				dev_addr_set(dev, &aa->s_node);
+
+				// Setup tashtalk to respond to that addr
+				tash_setbits(tt, aa->s_node);
+
 				printk(KERN_ERR "TashTalk set addr to: %i.%i", aa->s_net, aa->s_node);
 			return 0;
 
@@ -601,21 +630,6 @@ static int tashtalk_open(struct tty_struct *tty)
 	/* Done.  We have linked the TTY line to a channel. */
 	rtnl_unlock();
 	tty->receive_room = 65536;	/* We don't flow control */
-
-	unsigned char conf[32];
-	memset(conf, 0, 32);
-
-
-	conf[0] = 0xFE;
-/*
-	conf[1] = 0xFF;
-	conf[2] = 0xFF;
-	conf[3] = 0xFF;
-	conf[4] = 0xFF;
-*/
-	char command = 0x02;
-	tt->tty->ops->write(tt->tty, &command, 1);
-	tt->tty->ops->write(tt->tty, conf, 32);
 
 	/* TTY layer expects 0 on success */
 	printk(KERN_INFO "TashTalk is on port %s", tty->name);
