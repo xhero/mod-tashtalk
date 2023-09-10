@@ -119,7 +119,7 @@ static void tt_post_to_netif(struct tashtalk *tt)
 
 	dev->stats.rx_bytes += count;
 
-	skb = dev_alloc_skb(count + 20);
+	skb = dev_alloc_skb(count);
 	if (skb == NULL) {
 		printk(KERN_WARNING "%s: memory squeeze, dropping packet.\n", dev->name);
 		dev->stats.rx_dropped++;
@@ -189,6 +189,8 @@ static void tash_transmit_worker(struct work_struct *work)
 {
 	struct tashtalk *tt = container_of(work, struct tashtalk, tx_work);
 	int actual;
+
+	//printk("tash_transmit_worker!!!!!!!!!!!!!!!!------------------------------");
 
 	spin_lock_bh(&tt->lock);
 	/* First make sure we're connected. */
@@ -413,11 +415,18 @@ static void tashtalk_receive_buf(struct tty_struct *tty, const unsigned char *cp
 	printk(KERN_ERR "Tash read %i", count);
     print_hex_dump_bytes("Tash read: ", DUMP_PREFIX_NONE, cp, count);
 
-	if (!test_bit(TT_FLAG_ESCAPE, &tt->flags))
+	// Fresh frame
+	if (!test_bit(TT_FLAG_INFRAME, &tt->flags))
 		tt->rcount = 0;
+	else
+		printk("Tash start new frame");
+
+	set_bit(TT_FLAG_INFRAME, &tt->flags);
 
 	for (i = 0; i < count; i++) {
 
+		set_bit(TT_FLAG_INFRAME, &tt->flags);
+		
 		if (cp[i] == 0x00) {
 			set_bit(TT_FLAG_ESCAPE, &tt->flags);
 			continue;
@@ -428,20 +437,25 @@ static void tashtalk_receive_buf(struct tty_struct *tty, const unsigned char *cp
 				tt->rbuff[tt->rcount] = 0x00;
 				tt->rcount++;
 			} else if (cp[i] == 0xFD) {
-				printk(KERN_ERR "Tash done frame %i", tt->rcount);
+				printk(KERN_ERR "Tash done frame, len=%i", tt->rcount);
 				// echo 'file tashtalk.c line 403 +p' > /sys/kernel/debug/dynamic_debug/control
 				print_hex_dump_bytes("LLAP IN frame: ", DUMP_PREFIX_NONE, tt->rbuff, tt->rcount);
 				tt_post_to_netif(tt);
 				tt->rcount = 0;
+				clear_bit(TT_FLAG_INFRAME, &tt->flags);
+				printk("start next pkt, len=%i", count - i);
 			} else if (cp[i] == 0xFE) {
 				printk(KERN_ERR "Tash frame error");
 				tt->rcount = 0;
+				clear_bit(TT_FLAG_INFRAME, &tt->flags);
 			} else if (cp[i] == 0xFA) {
 				printk(KERN_ERR "Tash frame abort");
 				tt->rcount = 0;
+				clear_bit(TT_FLAG_INFRAME, &tt->flags);
 			} else if (cp[i] == 0xFC) {
 				printk(KERN_ERR "Tash frame crc error");
 				tt->rcount = 0;
+				clear_bit(TT_FLAG_INFRAME, &tt->flags);
 			} else {
 				printk(KERN_ERR "Tash escape unknown %c", cp[i]);
 			}

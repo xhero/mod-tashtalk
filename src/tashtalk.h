@@ -41,6 +41,7 @@ struct tashtalk {
   unsigned long		flags;		/* Flag values/ mode etc	*/
 #define TT_FLAG_INUSE	0		  /* Channel in use               */
 #define TT_FLAG_ESCAPE 1    /* ESC received                 */
+#define TT_FLAG_INFRAME 2   /* We did not finish decoding a frame */
 
   unsigned char		mode;		/* really not used */
   pid_t			pid;
