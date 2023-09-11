@@ -72,7 +72,6 @@ u16 lt_crc[] = {
 
 static void tash_setbits(struct tashtalk *tt, unsigned char addr) {
 	unsigned char bits[33];
-	unsigned char command = 0x02;
 	unsigned int byte, pos;
 
 	// 0, 255 and anything else are invalid
@@ -94,6 +93,16 @@ static void tash_setbits(struct tashtalk *tt, unsigned char addr) {
 	tt->tty->ops->write(tt->tty, bits, sizeof(bits));
 }
 
+static u16 tash_crc(const unsigned char* data, int len) {
+	u16 crc = 0xFFFF;
+
+	for (int i = 0; i<len; i++) {
+    	u8 index = (crc & 0xFF) ^ data[i];
+    	crc = lt_crc[index] ^ (crc >> 8);
+	}
+
+	return crc;
+}
 
 /* Set the "sending" flag.  This must be atomic hence the set_bit. */
 static inline void tt_lock_netif(struct tashtalk *tt)
@@ -113,20 +122,30 @@ static void tt_post_to_netif(struct tashtalk *tt)
 {
 	struct net_device *dev = tt->dev;
 	struct sk_buff *skb;
-	int count;
 
-	count = tt->rcount;
+	// before doing stuff, we need to make sure it is not a control frame
+	// Control frames are always 5 bytes long
+	if (tt->rcount <= 5)
+		return;
 
-	dev->stats.rx_bytes += count;
+	// 0xF0B8 is the magic crc nr
+	if (tash_crc(tt->rbuff, tt->rcount) != 0xF0B8) {
+		printk("Tash invalid CRC, drop packet");
+		return;
+	}
 
-	skb = dev_alloc_skb(count);
+	tt->rcount -= 2; // Strip away the CRC bytes
+	dev->stats.rx_bytes += tt->rcount;
+
+	skb = dev_alloc_skb(tt->rcount);
 	if (skb == NULL) {
 		printk(KERN_WARNING "%s: memory squeeze, dropping packet.\n", dev->name);
 		dev->stats.rx_dropped++;
 		return;
 	}
 
-	skb_put_data(skb, tt->rbuff, count);
+	// skip the CRC bytes at the end
+	skb_put_data(skb, tt->rbuff, tt->rcount);
 	skb->dev = dev;
     skb->protocol = htons(ETH_P_LOCALTALK);
 
@@ -143,6 +162,8 @@ static void tt_send_frame(struct tashtalk *tt, unsigned char *icp, int len)
 {
 	int actual;
 	char start = 0x01;
+	u16 crc = 0xFFFF;
+	unsigned char crc_bytes[2];
 
 	if (len > tt->mtu) {		/* Sigh, shouldn't occur BUT ... */
 		printk(KERN_WARNING "%s: truncating oversized transmit packet %i vs %i!\n", tt->dev->name, len, tt->mtu);
@@ -151,10 +172,7 @@ static void tt_send_frame(struct tashtalk *tt, unsigned char *icp, int len)
 		return;
 	}
 
-	// make the crc
-	u16 crc = 0xFFFF;
-	unsigned char crc_bytes[2];
-
+	// calculate the crc
 	for (int i = 0; i<len; i++) {
     	u8 index = (crc & 0xFF) ^ icp[i];
     	crc = lt_crc[index] ^ (crc >> 8);
