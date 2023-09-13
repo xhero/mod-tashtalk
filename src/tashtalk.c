@@ -198,7 +198,7 @@ static void tt_send_frame(struct tashtalk *tt, unsigned char *icp, int len)
 
 	print_hex_dump_bytes("LLAP OUT frame sans CRC: ", DUMP_PREFIX_NONE, icp, len);
 
-	printk(KERN_WARNING "Trasmit to TASH %i", actual);
+	printk(KERN_WARNING "Trasmit to TASH actual %i, req %i", actual, len);
 	tt_unlock_netif(tt);
 }
 
@@ -208,7 +208,7 @@ static void tash_transmit_worker(struct work_struct *work)
 	struct tashtalk *tt = container_of(work, struct tashtalk, tx_work);
 	int actual;
 
-	//printk("tash_transmit_worker!!!!!!!!!!!!!!!!------------------------------");
+	printk("tash_transmit_worker ---> %i", tt->xleft);
 
 	spin_lock_bh(&tt->lock);
 	/* First make sure we're connected. */
@@ -227,7 +227,7 @@ static void tash_transmit_worker(struct work_struct *work)
 		return;
 	}
 
-	actual = tt->tty->ops->write(tt->tty, tt->xhead, tt->xleft);
+	//actual = tt->tty->ops->write(tt->tty, tt->xhead, tt->xleft);
 	tt->xleft -= actual;
 	tt->xhead += actual;
 	spin_unlock_bh(&tt->lock);
@@ -430,14 +430,15 @@ static void tashtalk_receive_buf(struct tty_struct *tty, const unsigned char *cp
 	if (!tt || tt->magic != TASH_MAGIC || !netif_running(tt->dev))
 		return;
 
-	printk(KERN_ERR "Tash read %i", count);
+	printk(KERN_ERR "(1) Tash read %i", count);
     print_hex_dump_bytes("Tash read: ", DUMP_PREFIX_NONE, cp, count);
 
 	// Fresh frame
-	if (!test_bit(TT_FLAG_INFRAME, &tt->flags))
+	if (!test_bit(TT_FLAG_INFRAME, &tt->flags)) {
 		tt->rcount = 0;
-	else
-		printk("Tash start new frame");
+		printk("(2) Tash start new frame");
+	} else
+		printk("(2) Tash continue frame");
 
 	set_bit(TT_FLAG_INFRAME, &tt->flags);
 
@@ -455,13 +456,13 @@ static void tashtalk_receive_buf(struct tty_struct *tty, const unsigned char *cp
 				tt->rbuff[tt->rcount] = 0x00;
 				tt->rcount++;
 			} else if (cp[i] == 0xFD) {
-				printk(KERN_ERR "Tash done frame, len=%i", tt->rcount);
+				printk(KERN_ERR "(3) Tash done frame, len=%i", tt->rcount);
 				// echo 'file tashtalk.c line 403 +p' > /sys/kernel/debug/dynamic_debug/control
-				print_hex_dump_bytes("LLAP IN frame: ", DUMP_PREFIX_NONE, tt->rbuff, tt->rcount);
+				print_hex_dump_bytes("(3a) LLAP IN frame: ", DUMP_PREFIX_NONE, tt->rbuff, tt->rcount);
 				tt_post_to_netif(tt);
 				tt->rcount = 0;
 				clear_bit(TT_FLAG_INFRAME, &tt->flags);
-				printk("start next pkt, len=%i", count - i);
+				printk("(4) Tash next frame, remaining=%i", count - i - 1);
 			} else if (cp[i] == 0xFE) {
 				printk(KERN_ERR "Tash frame error");
 				tt->rcount = 0;
@@ -484,7 +485,7 @@ static void tashtalk_receive_buf(struct tty_struct *tty, const unsigned char *cp
 
 	}
 
-	printk(KERN_ERR "Done tashing");
+	printk(KERN_ERR "(5) Done read, pending frame=%i", test_bit(TT_FLAG_INFRAME, &tt->flags));
 	
 /*
 	skb = dev_alloc_skb(count);
