@@ -183,6 +183,13 @@ static void tt_send_frame(struct tashtalk *tt, unsigned char *icp, int len)
 
 	printk(KERN_WARNING "CRC %x", crc);
 
+	memset(tt->xbuff, 0, sizeof(tt->xbuff));
+
+	tt->xbuff[0] = 0x01; // First byte is te Tash SEND command
+	memcpy(&tt->xbuff[1], icp, len); // followed by all the bytes
+	memcpy(&tt->xbuff[1 + len], crc_bytes, sizeof(crc_bytes)); // lastly follow with the crc
+	len += 3; // We added our own three bytes
+
 	/* Order of next two lines is *very* important.
 	 * When we are sending a little amount of data,
 	 * the transfer may be completed inside the ops->write()
@@ -192,9 +199,19 @@ static void tt_send_frame(struct tashtalk *tt, unsigned char *icp, int len)
 	 *       14 Oct 1994  Dmitry Gorodchanin.
 	 */
 	set_bit(TTY_DO_WRITE_WAKEUP, &tt->tty->flags);
+	actual = tt->tty->ops->write(tt->tty, tt->xbuff, len);
+
+	// Any bytes left?
+	sl->xleft = len - actual;
+	// Move the pointer to the correct position
+	// see you in tash_transmit_worker
+	sl->xhead = sl->xbuff + actual;
+
+	/*
 	actual = tt->tty->ops->write(tt->tty, &start, 1);
 	actual += tt->tty->ops->write(tt->tty, icp, len);
 	actual += tt->tty->ops->write(tt->tty, crc_bytes, 2);
+	*/
 
 	print_hex_dump_bytes("LLAP OUT frame sans CRC: ", DUMP_PREFIX_NONE, icp, len);
 
@@ -208,8 +225,6 @@ static void tash_transmit_worker(struct work_struct *work)
 	struct tashtalk *tt = container_of(work, struct tashtalk, tx_work);
 	int actual;
 
-	printk("tash_transmit_worker ---> %i", tt->xleft);
-
 	spin_lock_bh(&tt->lock);
 	/* First make sure we're connected. */
 	if (!tt->tty || tt->magic != TASH_MAGIC || !netif_running(tt->dev)) {
@@ -217,19 +232,26 @@ static void tash_transmit_worker(struct work_struct *work)
 		return;
 	}
 
+	// We always get here after all transmissions
+	// No more data?
 	if (tt->xleft <= 0)  {
-		/* Now serial buffer is almost free & we can start
-		 * transmission of another packet */
+		/* reset the flags for transmission
+		and re-wake the netif queue */
 		tt->dev->stats.tx_packets++;
 		clear_bit(TTY_DO_WRITE_WAKEUP, &tt->tty->flags);
 		spin_unlock_bh(&tt->lock);
 		tt_unlock_netif(tt);
+		printk("Transmission finished, on to next");
 		return;
 	}
 
-	//actual = tt->tty->ops->write(tt->tty, tt->xhead, tt->xleft);
+	// Send whatever is there to send
+	// This function will be calleg again if xleft <= 0 
+	printk(KERN_WARNING "Trasmit to TASH remaining bytes %i", tt->xleft);
+	actual = tt->tty->ops->write(tt->tty, tt->xhead, tt->xleft);
 	tt->xleft -= actual;
 	tt->xhead += actual;
+	printk(KERN_WARNING "Trasmit to TASH actual bytes %i", actual);
 	spin_unlock_bh(&tt->lock);
 }
 
