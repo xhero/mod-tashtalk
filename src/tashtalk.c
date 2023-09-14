@@ -202,10 +202,10 @@ static void tt_send_frame(struct tashtalk *tt, unsigned char *icp, int len)
 	actual = tt->tty->ops->write(tt->tty, tt->xbuff, len);
 
 	// Any bytes left?
-	sl->xleft = len - actual;
+	tt->xleft = len - actual;
 	// Move the pointer to the correct position
 	// see you in tash_transmit_worker
-	sl->xhead = sl->xbuff + actual;
+	tt->xhead = tt->xbuff + actual;
 
 	/*
 	actual = tt->tty->ops->write(tt->tty, &start, 1);
