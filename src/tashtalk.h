@@ -18,7 +18,7 @@
  * override with insmod -otash_maxdev=nnn
  */
 #define TASH_MAX_CHAN	32
-#define TT_MTU		    600		/* FIXME figure out the real mtu	*/
+#define TT_MTU		    605
 
 struct tashtalk {
   int			magic;
