@@ -165,13 +165,6 @@ static void tt_send_frame(struct tashtalk *tt, unsigned char *icp, int len)
 	u16 crc = 0xFFFF;
 	unsigned char crc_bytes[2];
 
-	if (len > tt->mtu) {		/* Sigh, shouldn't occur BUT ... */
-		printk(KERN_WARNING "%s: truncating oversized transmit packet %i vs %i!\n", tt->dev->name, len, tt->mtu);
-		tt->dev->stats.tx_dropped++;
-		tt_unlock_netif(tt);
-		return;
-	}
-
 	// calculate the crc
 	for (int i = 0; i<len; i++) {
     	u8 index = (crc & 0xFF) ^ icp[i];
@@ -216,7 +209,6 @@ static void tt_send_frame(struct tashtalk *tt, unsigned char *icp, int len)
 	print_hex_dump_bytes("LLAP OUT frame sans CRC: ", DUMP_PREFIX_NONE, icp, len);
 
 	printk(KERN_WARNING "Trasmit to TASH actual %i, req %i", actual, len);
-	tt_unlock_netif(tt);
 }
 
 /* Write out any remaining transmit buffer. Scheduled when tty is writable */
@@ -290,6 +282,12 @@ static netdev_tx_t
 tt_transmit(struct sk_buff *skb, struct net_device *dev)
 {
 	struct tashtalk *tt = netdev_priv(dev);
+    
+	if (skb->len > tt->mtu) {
+        printk(KERN_WARNING "%s: truncating oversized transmit packet %i vs %i!\n", dev->name, skb->len, tt->mtu);
+		dev_kfree_skb(skb);
+		return NETDEV_TX_OK;
+    }
 
 	printk(KERN_ERR "TashTalk: send data on %s\n", dev->name);
 
