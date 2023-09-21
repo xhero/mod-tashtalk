@@ -88,19 +88,6 @@ static u16 tash_crc(const unsigned char* data, int len) {
 	return crc;
 }
 
-/* Set the "sending" flag.  This must be atomic hence the set_bit. */
-static inline void tt_lock_netif(struct tashtalk *tt)
-{
-	netif_stop_queue(tt->dev);
-}
-
-
-/* Clear the "sending" flag.  This must be atomic, hence the ASM. */
-static inline void tt_unlock_netif(struct tashtalk *tt)
-{
-	netif_wake_queue(tt->dev);
-}
-
 /* Send one completely decapsulated IP datagram to the IP layer. */
 static void tt_post_to_netif(struct tashtalk *tt)
 {
@@ -152,8 +139,6 @@ static void tt_send_frame(struct tashtalk *tt, unsigned char *icp, int len)
 	crc_bytes[0] = (crc & 0xFF) ^ 0xFF;
 	crc_bytes[1] = (crc >> 8) ^ 0xFF;
 
-	printk(KERN_WARNING "CRC %x", crc);
-
 	memset(tt->xbuff, 0, sizeof(tt->xbuff));
 
 	tt->xbuff[0] = 0x01; // First byte is te Tash SEND command
@@ -204,18 +189,18 @@ static void tash_transmit_worker(struct work_struct *work)
 		tt->dev->stats.tx_packets++;
 		clear_bit(TTY_DO_WRITE_WAKEUP, &tt->tty->flags);
 		spin_unlock_bh(&tt->lock);
-		tt_unlock_netif(tt);
+		netif_wake_queue(tt->dev);
 		printk(KERN_DEBUG "TashTalk: transmission finished, on to next");
 		return;
 	}
 
 	// Send whatever is there to send
 	// This function will be calleg again if xleft <= 0 
-	printk(KERN_DEBUG "TashTalk: trasmit to TASH remaining bytes %i", tt->xleft);
+	printk(KERN_DEBUG "TashTalk: trasmit remaining bytes %i", tt->xleft);
 	actual = tt->tty->ops->write(tt->tty, tt->xhead, tt->xleft);
 	tt->xleft -= actual;
 	tt->xhead += actual;
-	printk(KERN_DEBUG "TashTalk: Trasmit to TASH actual bytes %i", actual);
+	printk(KERN_DEBUG "TashTalk: Trasmitted actual bytes %i", actual);
 	spin_unlock_bh(&tt->lock);
 }
 
@@ -277,7 +262,7 @@ tt_transmit(struct sk_buff *skb, struct net_device *dev)
 		return NETDEV_TX_OK;
 	}
 
-	tt_lock_netif(tt);
+	netif_stop_queue(tt->dev);
 	dev->stats.tx_bytes += skb->len;
 	tt_send_frame(tt, skb->data, skb->len);
 	spin_unlock(&tt->lock);
