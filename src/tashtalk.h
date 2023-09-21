@@ -53,4 +53,13 @@ struct tashtalk {
 #define TASH_MAGIC  0xFDFA
 #define LLAP_CHECK  0xF0B8
 
+#define LLAP_ENQ    0x81
+#define LLAP_ACK    0x82
+#define LLAP_RTS    0x84
+#define LLAP_CTP    0x85
+
+#define LLAP_DST_POS  0
+#define LLAP_SRC_POS  1
+#define LLAP_TYP_POS  2
+
 #endif	/* _LINUX_TASHTALK_H.H */
