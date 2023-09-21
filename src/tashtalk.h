@@ -39,6 +39,7 @@ struct tashtalk {
   int             buffsize; /* Max buffers sizes            */
 
   unsigned long		flags;		/* Flag values/ mode etc	*/
+
 #define TT_FLAG_INUSE	0		  /* Channel in use               */
 #define TT_FLAG_ESCAPE 1    /* ESC received                 */
 #define TT_FLAG_INFRAME 2   /* We did not finish decoding a frame */
@@ -49,6 +50,7 @@ struct tashtalk {
   struct atalk_addr node_addr;	/* Full node address */
 };
 
-#define TASH_MAGIC 0xFDFA
+#define TASH_MAGIC  0xFDFA
+#define LLAP_CHECK  0xF0B8
 
 #endif	/* _LINUX_TASHTALK_H.H */
