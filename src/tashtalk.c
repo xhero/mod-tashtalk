@@ -61,7 +61,7 @@ static void tash_setbits(struct tashtalk *tt, unsigned char addr) {
 	byte = addr / 8 + 1; // skip initial command byte
 	pos = (addr % 8);
 
-	printk(KERN_DRBUG "TashTalk: setting address %i (byte %i bit %i) for you.", addr, byte - 1, pos);
+	printk(KERN_DEBUG "TashTalk: setting address %i (byte %i bit %i) for you.", addr, byte - 1, pos);
 
 	bits[0] = 0x02; // the command
 	bits[byte] = (1<<pos);
@@ -261,7 +261,7 @@ tt_transmit(struct sk_buff *skb, struct net_device *dev)
 		return NETDEV_TX_OK;
     }
 
-	printk(KERN_DEBUG "TashTalk: %s send data on %s\n", dev->name);
+	printk(KERN_DEBUG "TashTalk: send data on %s\n", dev->name);
 
 	spin_lock(&tt->lock);
 	if (!netif_running(dev)) {
