@@ -234,7 +234,6 @@ out:
 }
 
 
-/* Encapsulate an IP datagram and kick it into a TTY queue. */
 static netdev_tx_t
 tt_transmit(struct sk_buff *skb, struct net_device *dev)
 {
@@ -390,7 +389,66 @@ static const struct net_device_ops tt_netdev_ops = {
 	.ndo_set_rx_mode	= tt_set_multicast,
 };
 
+static void tashtalk_send_ack(struct tashtalk *tt, unsigned char node) {
+	unsigned char buf[5];
+	u16 crc;
 
+	buf[LLAP_DST_POS] = node;
+	buf[LLAP_SRC_POS] = tt->node_addr.s_node;
+	buf[LLAP_TYP_POS] = LLAP_ACK;
+
+	crc = tash_crc(buf, 3);
+	buf[3] = (crc & 0xFF) ^ 0xFF;
+	buf[4] = (crc >> 8) ^ 0xFF;
+
+	tt->tty->ops->write(tt->tty, buf, sizeof(buf));
+	printk(KERN_DEBUG "TashTalk: repply ACK to ENQ from %i", node);
+}
+
+static void tashtalk_manage_control_frame(struct tashtalk *tt) {
+	// We care really only about ENQs here
+	// Only respond if we were assigned a valid address
+	if (tt->rbuff[LLAP_TYP_POS] == LLAP_ENQ 
+		&& tt->node_addr.s_node != 0
+		&& tt->rbuff[LLAP_SRC_POS] == tt->node_addr.s_node) {
+		printk(KERN_DEBUG "TashTalk: ENQ frame for %i", tt->rbuff[LLAP_SRC_POS]);
+
+		tashtalk_send_ack(tt, tt->rbuff[LLAP_SRC_POS]);
+	}
+}
+
+static int tashtalk_is_control_frame(unsigned char *frame) {
+	return (frame[LLAP_TYP_POS] >= LLAP_ENQ && frame[LLAP_TYP_POS] <= LLAP_CTS);
+}
+
+static void tashtalk_manage_valid_frame(struct tashtalk *tt) {
+	printk(KERN_DEBUG "(3) TashTalk done frame, len=%i", tt->rcount);
+	// echo 'file tashtalk.c line 403 +p' > /sys/kernel/debug/dynamic_debug/control
+	print_hex_dump_bytes("(3a) LLAP IN frame: ", DUMP_PREFIX_NONE, tt->rbuff, tt->rcount);
+
+	// Control frames are not sent to the netif
+	if (tt->rcount == 5 && tashtalk_is_control_frame(tt->rbuff))
+		tashtalk_manage_control_frame(tt);
+	else
+		tt_post_to_netif(tt);
+
+	printk(KERN_DEBUG "(4) TashTalk next frame");
+}
+
+static void tashtalk_manage_escape(struct tashtalk *tt, unsigned char seq)
+{
+	switch (seq) {
+		case 0xFD: tashtalk_manage_valid_frame(tt);					break;
+		case 0xFE: printk(KERN_ERR "TashTalk: frame error"); 		break;
+		case 0xFA: printk(KERN_ERR "TashTalk: frame abort"); 		break;
+		case 0xFC: printk(KERN_ERR "TashTalk: frame crc error");	break;
+
+		default: printk(KERN_ERR "TashTalk: unknown escape sequence %c", seq); break;
+	}
+
+	tt->rcount = 0;
+	clear_bit(TT_FLAG_INFRAME, &tt->flags);
+}
 
 /********************************************
   Routines looking at TTY talking to TashTalk
@@ -430,28 +488,8 @@ static void tashtalk_receive_buf(struct tty_struct *tty, const unsigned char *cp
 			if (cp[i] == 0xFF) {
 				tt->rbuff[tt->rcount] = 0x00;
 				tt->rcount++;
-			} else if (cp[i] == 0xFD) {
-				printk(KERN_DEBUG "(3) TashTalk done frame, len=%i", tt->rcount);
-				// echo 'file tashtalk.c line 403 +p' > /sys/kernel/debug/dynamic_debug/control
-				print_hex_dump_bytes("(3a) LLAP IN frame: ", DUMP_PREFIX_NONE, tt->rbuff, tt->rcount);
-				tt_post_to_netif(tt);
-				tt->rcount = 0;
-				clear_bit(TT_FLAG_INFRAME, &tt->flags);
-				printk(KERN_DEBUG "(4) TashTalk next frame, remaining=%i", count - i - 1);
-			} else if (cp[i] == 0xFE) {
-				printk(KERN_ERR "TashTalk: frame error");
-				tt->rcount = 0;
-				clear_bit(TT_FLAG_INFRAME, &tt->flags);
-			} else if (cp[i] == 0xFA) {
-				printk(KERN_ERR "TashTalk: frame abort");
-				tt->rcount = 0;
-				clear_bit(TT_FLAG_INFRAME, &tt->flags);
-			} else if (cp[i] == 0xFC) {
-				printk(KERN_ERR "TashTalk: frame crc error");
-				tt->rcount = 0;
-				clear_bit(TT_FLAG_INFRAME, &tt->flags);
 			} else {
-				printk(KERN_ERR "TashTalk: unknown escape sequence %c", cp[i]);
+				tashtalk_manage_escape(tt, cp[i]);
 			}
 		} else {
 			tt->rbuff[tt->rcount] = cp[i];
@@ -495,7 +533,6 @@ static int tt_alloc_bufs(struct tashtalk *tt, int mtu)
 		goto err_exit;
 	}
 
-	tt->mtu	     = mtu;
 	tt->buffsize = len;
 	tt->rcount   = 0;
 	tt->xleft    = 0;
@@ -552,6 +589,11 @@ static struct tashtalk *tt_alloc(void)
 	tt->dev->netdev_ops = &tt_netdev_ops;
 	tt->dev->type =  ARPHRD_LOCALTLK;
 	tt->dev->priv_destructor = tt_free_netdev;
+
+	// Initially we have no address
+	// so we do not reply to ENQs
+	tt->node_addr.s_node = 0;
+	tt->node_addr.s_net = 0;
 
 	spin_lock_init(&tt->lock);
 	INIT_WORK(&tt->tx_work, tash_transmit_worker);
