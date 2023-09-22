@@ -47,6 +47,8 @@ static int tash_maxdev = TASH_MAX_CHAN;
 module_param(tash_maxdev, int, 0);
 MODULE_PARM_DESC(tash_maxdev, "Maximum number of tashtalk devices");
 
+static void tashtalk_send_ctrl_packet(struct tashtalk *tt, unsigned char dst, unsigned char src, unsigned char type);
+
 static void tash_setbits(struct tashtalk *tt, unsigned char addr) {
 	unsigned char bits[33];
 	unsigned int byte, pos;
@@ -328,6 +330,52 @@ tt_get_stats64(struct net_device *dev, struct rtnl_link_stats64 *stats)
 	stats->rx_over_errors = devstats->rx_over_errors;
 }
 
+unsigned char tt_arbitrate_addr_blocking(struct tashtalk *tt, unsigned char addr) {
+	unsigned char min, max;
+	unsigned char rand;
+	int i;
+
+	/* This works a bit backwards, we send many ENQs
+	   and are happy not to receive ACKs. 
+	   If we get ACK, we try another addr 
+	*/
+	
+	// Set the ranges, the new address hould stay in the proper one
+	if (addr < 129) {
+		min = 1;
+		max = 128;
+	} else {
+		min = 129;
+		max = 254;
+	}
+
+	printk(KERN_DEBUG "TashTalk: start address arbitration, requested %i", addr);
+
+	set_bit(TT_FLAG_WAITADDR, &tt->flags);
+
+	for (i = 0; i < 10; i++) {
+		clear_bit(TT_FLAG_GOTACK, &tt->flags);
+		tashtalk_send_ctrl_packet(tt, addr, addr, LLAP_ENQ);
+
+		// Timeout == nobody reclaims our addr
+		if (wait_event_timeout(tt->addr_wait, test_bit(TT_FLAG_GOTACK, &tt->flags), msecs_to_jiffies(1))) {
+			unsigned char newaddr;
+			// Oops! somebody has the same addr as us make up a new one and start over
+
+			get_random_bytes(&rand, 1);
+			newaddr = min + rand % (max - min + 1);
+			printk(KERN_DEBUG "TashTalk: addr %i is in use, try %i", addr, newaddr);
+			addr = newaddr;
+		}
+	}
+
+	clear_bit(TT_FLAG_WAITADDR, &tt->flags);
+
+	printk(KERN_DEBUG "TashTalk: arbitrated address is %i", addr);
+
+	return addr;
+}
+
 static int tt_ioctl(struct net_device *dev, struct ifreq *ifr, int cmd)
 {
 		struct tashtalk *tt = netdev_priv(dev);
@@ -337,6 +385,9 @@ static int tt_ioctl(struct net_device *dev, struct ifreq *ifr, int cmd)
         switch(cmd)
         {
             case SIOCSIFADDR:
+
+				sa->sat_addr.s_node = tt_arbitrate_addr_blocking(tt, sa->sat_addr.s_node);
+
 				aa->s_net = sa->sat_addr.s_net;
                 aa->s_node = sa->sat_addr.s_node; //FIXME! arbitrate id
 
@@ -389,31 +440,48 @@ static const struct net_device_ops tt_netdev_ops = {
 	.ndo_set_rx_mode	= tt_set_multicast,
 };
 
-static void tashtalk_send_ack(struct tashtalk *tt, unsigned char node) {
+static void tashtalk_send_ctrl_packet(struct tashtalk *tt, unsigned char dst, unsigned char src, unsigned char type) {
 	unsigned char buf[5];
+	unsigned char cmd = 0x01;
+	int actual;
 	u16 crc;
 
-	buf[LLAP_DST_POS] = node;
-	buf[LLAP_SRC_POS] = tt->node_addr.s_node;
-	buf[LLAP_TYP_POS] = LLAP_ACK;
+	buf[LLAP_DST_POS] = dst;
+	buf[LLAP_SRC_POS] = src;
+	buf[LLAP_TYP_POS] = type;
 
 	crc = tash_crc(buf, 3);
 	buf[3] = (crc & 0xFF) ^ 0xFF;
 	buf[4] = (crc >> 8) ^ 0xFF;
 
-	tt->tty->ops->write(tt->tty, buf, sizeof(buf));
-	printk(KERN_DEBUG "TashTalk: repply ACK to ENQ from %i", node);
+	actual = tt->tty->ops->write(tt->tty, &cmd, 1);
+	actual += tt->tty->ops->write(tt->tty, buf, sizeof(buf));
+	printk(KERN_DEBUG "TashTalk: control packet 0x%X sent to %i (%i)", type, dst, actual);
 }
 
 static void tashtalk_manage_control_frame(struct tashtalk *tt) {
-	// We care really only about ENQs here
-	// Only respond if we were assigned a valid address
-	if (tt->rbuff[LLAP_TYP_POS] == LLAP_ENQ 
-		&& tt->node_addr.s_node != 0
-		&& tt->rbuff[LLAP_SRC_POS] == tt->node_addr.s_node) {
-		printk(KERN_DEBUG "TashTalk: ENQ frame for %i", tt->rbuff[LLAP_SRC_POS]);
 
-		tashtalk_send_ack(tt, tt->rbuff[LLAP_SRC_POS]);
+	printk("TashTalk control frame: %i %i %i", tt->rbuff[0] , tt->rbuff[1] , tt->rbuff[2] );
+
+	switch (tt->rbuff[LLAP_TYP_POS]) {
+
+		case LLAP_ENQ:
+
+			if ( tt->node_addr.s_node != 0 && tt->rbuff[LLAP_SRC_POS] == tt->node_addr.s_node) {
+				printk(KERN_DEBUG "TashTalk: repply ACK to ENQ from %i", tt->rbuff[LLAP_SRC_POS]);
+				//tashtalk_send_ack(tt, tt->rbuff[LLAP_SRC_POS]);
+				tashtalk_send_ctrl_packet(tt, tt->rbuff[LLAP_SRC_POS], tt->node_addr.s_node, LLAP_ACK);
+			}
+
+		break;
+
+		case LLAP_ACK:
+			if (test_bit(TT_FLAG_WAITADDR, &tt->flags)) {
+				set_bit(TT_FLAG_GOTACK, &tt->flags);
+				wake_up(&tt->addr_wait);
+			}
+		break;
+
 	}
 }
 
@@ -596,6 +664,7 @@ static struct tashtalk *tt_alloc(void)
 	tt->node_addr.s_net = 0;
 
 	spin_lock_init(&tt->lock);
+	init_waitqueue_head(&tt->addr_wait);
 	INIT_WORK(&tt->tx_work, tash_transmit_worker);
 
 	tastalk_devs[i] = dev;
