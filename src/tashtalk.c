@@ -370,6 +370,7 @@ unsigned char tt_arbitrate_addr_blocking(struct tashtalk *tt, unsigned char addr
 	}
 
 	clear_bit(TT_FLAG_WAITADDR, &tt->flags);
+	clear_bit(TT_FLAG_GOTACK, &tt->flags);
 
 	printk(KERN_DEBUG "TashTalk: arbitrated address is %i", addr);
 
@@ -461,7 +462,7 @@ static void tashtalk_send_ctrl_packet(struct tashtalk *tt, unsigned char dst, un
 
 static void tashtalk_manage_control_frame(struct tashtalk *tt) {
 
-	printk("TashTalk control frame: %i %i %i", tt->rbuff[0] , tt->rbuff[1] , tt->rbuff[2] );
+	//printk("TashTalk control frame: %i %i %i", tt->rbuff[0] , tt->rbuff[1] , tt->rbuff[2] );
 
 	switch (tt->rbuff[LLAP_TYP_POS]) {
 
