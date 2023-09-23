@@ -156,7 +156,7 @@ static void tt_send_frame(struct tashtalk *tt, unsigned char *icp, int len)
 	 * if we did not request it before write operation.
 	 *       14 Oct 1994  Dmitry Gorodchanin.
 	 */
-	set_bit(TTY_DO_WRITE_WAKEUP, &tt->tty->flags);
+	//set_bit(TTY_DO_WRITE_WAKEUP, &tt->tty->flags);
 	actual = tt->tty->ops->write(tt->tty, tt->xbuff, len);
 
 	// Any bytes left?
@@ -168,6 +168,12 @@ static void tt_send_frame(struct tashtalk *tt, unsigned char *icp, int len)
 	print_hex_dump_bytes("TashTalk: LLAP OUT frame sans CRC: ", DUMP_PREFIX_NONE, icp, len);
 
 	printk(KERN_DEBUG "TashTalk: transmit actual %i, requested %i", actual, len);
+	if (actual == len) {
+		clear_bit(TTY_DO_WRITE_WAKEUP, &tt->tty->flags);
+		netif_wake_queue(tt->dev);
+	} else {
+		set_bit(TTY_DO_WRITE_WAKEUP, &tt->tty->flags);
+	}
 }
 
 /* Write out any remaining transmit buffer. Scheduled when tty is writable */
