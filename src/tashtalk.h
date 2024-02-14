@@ -2,7 +2,7 @@
 /*
  * tashtalk.h	Define the TashTalk interface
  *
- * Version:	@(#)tasktalk.h	0.1	2023
+ * Version:	@(#)tasktalk.h	0.1	2023-2024
  *
  * Based on slip.c by
  * Laurence Culhane and Fred N. van Kempen

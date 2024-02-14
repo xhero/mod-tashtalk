@@ -5,6 +5,6 @@ sudo insmod src/tashtalk.ko
 #sudo ./discipline
 
 sudo stty -F /dev/ttyUSB0 crtscts
-sudo ldattach -d -s 1000000 PPP /dev/ttyUSB0
+sudo ldattach -d -s 1000000 29 /dev/ttyUSB0
 
 #echo 'file hello.c line 327  +p' > /sys/kernel/debug/dynamic_debug/control
