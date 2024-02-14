@@ -96,7 +96,7 @@ static u16 tash_crc(const unsigned char* data, int len) {
 	return crc;
 }
 
-/* Send one completely decapsulated IP datagram to the IP layer. */
+/* Send one completely decapsulated DDP datagram to the DDP layer. */
 static void tt_post_to_netif(struct tashtalk *tt)
 {
 	struct net_device *dev = tt->dev;
@@ -128,6 +128,7 @@ static void tt_post_to_netif(struct tashtalk *tt)
 	skb->dev = dev;
     skb->protocol = htons(ETH_P_LOCALTALK);
 
+	// This is for compatibility with the phase1 to phase2 translation
 	skb_reset_mac_header(skb);    /* Point to entire packet. */
     skb_pull(skb, 3);
     skb_reset_transport_header(skb);    /* Point to data (Skip header). */
@@ -136,7 +137,7 @@ static void tt_post_to_netif(struct tashtalk *tt)
 	dev->stats.rx_packets++;
 }
 
-/* Encapsulate one IP datagram and stuff into a TTY queue. */
+/* Encapsulate one DDP datagram and stuff into a TTY queue. */
 static void tt_send_frame(struct tashtalk *tt, unsigned char *icp, int len)
 {
 	int actual;
@@ -344,6 +345,7 @@ tt_get_stats64(struct net_device *dev, struct rtnl_link_stats64 *stats)
 	stats->rx_over_errors = devstats->rx_over_errors;
 }
 
+// This has to be blocking for compatibility with netatalk
 unsigned char tt_arbitrate_addr_blocking(struct tashtalk *tt, unsigned char addr) {
 	unsigned char min, max;
 	unsigned char rand;
@@ -475,9 +477,6 @@ static void tashtalk_send_ctrl_packet(struct tashtalk *tt, unsigned char dst, un
 }
 
 static void tashtalk_manage_control_frame(struct tashtalk *tt) {
-
-	//printk("TashTalk control frame: %i %i %i", tt->rbuff[0] , tt->rbuff[1] , tt->rbuff[2] );
-
 	switch (tt->rbuff[LLAP_TYP_POS]) {
 
 		case LLAP_ENQ:
@@ -703,10 +702,6 @@ static int tashtalk_open(struct tty_struct *tty)
 	if (tty->ops->write == NULL)
 		return -EOPNOTSUPP;
 
-	/* RTnetlink lock is misused here to serialize concurrent
-	   opens of slip channels. There are better ways, but it is
-	   the simplest one.
-	 */
 	rtnl_lock();
 
 	tt = tty->disc_data;
