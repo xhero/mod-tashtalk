@@ -147,9 +147,9 @@ static void tt_post_to_netif(struct tashtalk *tt)
 /* Encapsulate one DDP datagram and stuff into a TTY queue. */
 static void tt_send_frame(struct tashtalk *tt, unsigned char *icp, int len)
 {
+    unsigned char crc_bytes[2];
 	int actual;
 	u16 crc;
-	unsigned char crc_bytes[2];
 
 	crc = tash_crc(icp, len);
 	crc_bytes[0] = (crc & 0xFF) ^ 0xFF;
@@ -323,6 +323,7 @@ static int tt_close(struct net_device *dev)
 static int tt_open(struct net_device *dev)
 {
 	struct tashtalk *tt = netdev_priv(dev);
+
 	if (tt->tty == NULL) {
 		printk(KERN_ERR "TashTalk: %s TTY not open", dev->name);
 		return -ENODEV;
@@ -412,8 +413,8 @@ unsigned char tt_arbitrate_addr_blocking(struct tashtalk *tt,
 
 static int tt_ioctl(struct net_device *dev, struct ifreq *ifr, int cmd)
 {
+    struct sockaddr_at *sa = (struct sockaddr_at *)&ifr->ifr_addr;
 	struct tashtalk *tt = netdev_priv(dev);
-	struct sockaddr_at *sa = (struct sockaddr_at *)&ifr->ifr_addr;
 	struct atalk_addr *aa = &tt->node_addr;
 
 	switch (cmd) {
@@ -481,8 +482,8 @@ static const struct net_device_ops tt_netdev_ops = {
 static void tashtalk_send_ctrl_packet(struct tashtalk *tt, unsigned char dst,
 				      unsigned char src, unsigned char type)
 {
+    unsigned char cmd = 0x01;
 	unsigned char buf[5];
-	unsigned char cmd = 0x01;
 	int actual;
 	u16 crc;
 
@@ -642,9 +643,9 @@ static void tt_free_bufs(struct tashtalk *tt)
 static int tt_alloc_bufs(struct tashtalk *tt, int mtu)
 {
 	int err = -ENOBUFS;
-	unsigned long len;
 	char *rbuff = NULL;
 	char *xbuff = NULL;
+	unsigned long len;
 
 	// Make enough space? FIXME I guess
 	len = mtu * 2;
@@ -685,9 +686,9 @@ err_exit:
 /* Find a free channel, and link in this `tty' line. */
 static struct tashtalk *tt_alloc(void)
 {
-	int i;
 	struct net_device *dev = NULL;
 	struct tashtalk *tt;
+	int i;
 
 	for (i = 0; i < tash_maxdev; i++) {
 		dev = tastalk_devs[i];
@@ -856,8 +857,8 @@ static int tashtalk_ioctl(struct tty_struct *tty, unsigned int cmd,
 			  unsigned long arg)
 {
 	struct tashtalk *tt = tty->disc_data;
-	unsigned int tmp;
 	int __user *p = (int __user *)arg;
+	unsigned int tmp;
 
 	/* First make sure we're connected. */
 	if (!tt || tt->magic != TASH_MAGIC)
@@ -934,11 +935,11 @@ static int __init tashtalk_init(void)
 
 static void __exit tashtalk_exit(void)
 {
-	int i;
+    unsigned long timeout = jiffies + HZ;
 	struct net_device *dev;
 	struct tashtalk *tt;
-	unsigned long timeout = jiffies + HZ;
 	int busy = 0;
+	int i;
 
 	if (tastalk_devs == NULL)
 		return;
