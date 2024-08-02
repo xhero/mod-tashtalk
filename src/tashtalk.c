@@ -3,7 +3,7 @@
 /*      tashtalk.c: TashTalk LocalTalk driver for Linux.
  *
  *	Authors:
- *      twelvetone12
+ *      Rodolfo Zitellini (twelvetone12)
  *
  *      Derived from:
  *      - slip.c: A network driver outline for linux.
@@ -910,8 +910,8 @@ static int __init tashtalk_init(void)
 {
 	int status;
 
-	if (tash_maxdev < 4)
-		tash_maxdev = 4; /* Sanity */
+	if (tash_maxdev < 1)
+		tash_maxdev = 1;
 
 	printk(KERN_INFO "TashTalk Interface (dynamic channels, max=%d)",
 	       tash_maxdev);
@@ -943,8 +943,7 @@ static void __exit tashtalk_exit(void)
 	if (tastalk_devs == NULL)
 		return;
 
-	/* First of all: check for active disciplines and hangup them.
-	 */
+	/* First of all: check for active disciplines and hangup them. */
 	do {
 		if (busy)
 			msleep_interruptible(100);
