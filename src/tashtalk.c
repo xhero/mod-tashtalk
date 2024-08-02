@@ -162,16 +162,6 @@ static void tt_send_frame(struct tashtalk *tt, unsigned char *icp, int len)
 	memcpy(&tt->xbuff[1 + len], crc_bytes,
 	       sizeof(crc_bytes)); // lastly follow with the crc
 	len += 3; // We added our own three bytes
-
-	/* Order of next two lines is *very* important.
-	 * When we are sending a little amount of data,
-	 * the transfer may be completed inside the ops->write()
-	 * routine, because it's running with interrupts enabled.
-	 * In this case we *never* got WRITE_WAKEUP event,
-	 * if we did not request it before write operation.
-	 *       14 Oct 1994  Dmitry Gorodchanin.
-	 */
-	//set_bit(TTY_DO_WRITE_WAKEUP, &tt->tty->flags);
 	actual = tt->tty->ops->write(tt->tty, tt->xbuff, len);
 
 	// Any bytes left?
@@ -370,8 +360,8 @@ unsigned char tt_arbitrate_addr_blocking(struct tashtalk *tt,
 	int i;
 
 	/* This works a bit backwards, we send many ENQs
-	   and are happy not to receive ACKs. 
-	   If we get ACK, we try another addr 
+	   and are happy not to receive ACKs.
+	   If we get ACK, we try another addr
 	*/
 
 	// Set the ranges, the new address hould stay in the proper one
